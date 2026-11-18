@@ -14,6 +14,7 @@ pub mod merge;
 pub mod money;
 pub mod numbering;
 pub mod payments;
+pub mod pdf;
 pub mod storno;
 pub mod tax;
 pub mod tombstone;

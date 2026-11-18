@@ -17,6 +17,11 @@ serde_json = "1"
 sha2 = "0.11"
 dirs = "7"
 base64 = "0.23"
+krilla = "0.8.2"
+rustybuzz = "0.20.1"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 
 [dev-dependencies]
 tempfile = "3.27"
+pdf-extract = "0.12.1"
+lopdf = "0.42"

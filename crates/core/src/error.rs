@@ -49,6 +49,8 @@ pub enum Error {
     Import(String),
     #[error("merge failed: {0}")]
     Merge(String),
+    #[error("PDF failed: {0}")]
+    Pdf(String),
     #[error("in use by an issued invoice")]
     InUseByIssuedInvoice,
     #[error("counter too low, number {existing} already exists")]

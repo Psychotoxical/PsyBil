@@ -121,7 +121,8 @@ pub fn issue_invoice(
         InvoiceKind::Storno => business.storno_prefix.as_str(),
     };
     let number = allocate_number(tx, business.id, prefix, invoice.invoice_date.year())?;
-    let snapshot = build_snapshot(tx, &invoice, &number, &totals, false)?;
+    let mut snapshot = build_snapshot(tx, &invoice, &number, &totals, false)?;
+    snapshot["payment_received"] = opts.payment_received.into();
 
     let now = timestamp(clock);
     tx.execute(
@@ -141,6 +142,7 @@ pub fn issue_invoice(
         "INSERT INTO invoice_snapshots (invoice_id, snapshot, created_at) VALUES (?1, ?2, ?3)",
         params![id.to_string(), snapshot.to_string(), now],
     )?;
+    crate::pdf::archive::archive_pdf(tx, id)?;
 
     let mut negative_stock = Vec::new();
     for line in &invoice.lines {
@@ -199,7 +201,7 @@ pub fn issue_invoice(
 /// The frozen picture of an invoice: master data, lines, totals and texts as
 /// they are now. `imported` marks invoices taken over from VibeBill.
 pub(crate) fn build_snapshot(
-    tx: &Transaction,
+    tx: &Connection,
     invoice: &Invoice,
     number: &str,
     totals: &Totals,

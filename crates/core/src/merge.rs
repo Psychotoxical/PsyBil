@@ -358,7 +358,10 @@ fn rows_json(tx: &Transaction, sql: &str, id: Uuid) -> Result<serde_json::Value>
                 ValueRef::Text(t) => {
                     serde_json::Value::from(String::from_utf8_lossy(t).to_string())
                 }
-                ValueRef::Blob(b) => serde_json::Value::from(b.len()),
+                ValueRef::Blob(b) => {
+                    use base64::Engine;
+                    serde_json::Value::from(base64::engine::general_purpose::STANDARD.encode(b))
+                }
             };
             object.insert(name.clone(), value);
         }
@@ -1372,6 +1375,51 @@ mod review_tests {
         assert!(load_invoice(w.a.read(), foreign).is_err());
         assert_eq!(report.quarantined.len(), 1);
         assert_eq!(reasons(&w.a), vec!["cancelled_on_both_sides"]);
+    }
+
+    fn pdf_of(db: &Db, id: Uuid) -> Vec<u8> {
+        db.read()
+            .query_row(
+                "SELECT pdf FROM invoice_snapshots WHERE invoice_id = ?1",
+                [id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn merge_carries_archived_pdf() {
+        let mut w = w();
+        let (base, b_path) = split(&w, "b");
+        let (brand, customer) = (w.brand, w.customer);
+        let id = issue(&mut Db::open(&b_path).unwrap(), &w.clock, brand, customer);
+        let theirs = pdf_of(&Db::open(&b_path).unwrap(), id);
+        w.a.merge_from(&w.clock, &b_path, Some(&base)).unwrap();
+        assert_eq!(pdf_of(&w.a, id), theirs);
+    }
+
+    #[test]
+    fn quarantine_keeps_pdf_bytes() {
+        use base64::Engine;
+        let mut w = w();
+        let (base, b_path) = split(&w, "b");
+        let (brand, customer) = (w.brand, w.customer);
+        issue(&mut w.a, &w.clock, brand, customer);
+        let foreign = issue(&mut Db::open(&b_path).unwrap(), &w.clock, brand, customer);
+        let theirs = pdf_of(&Db::open(&b_path).unwrap(), foreign);
+        w.a.merge_from(&w.clock, &b_path, Some(&base)).unwrap();
+        let payload: String =
+            w.a.read()
+                .query_row("SELECT payload FROM merge_quarantine", [], |r| r.get(0))
+                .unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        let encoded = payload["snapshot"][0]["pdf"]
+            .as_str()
+            .expect("pdf as base64");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
+        assert_eq!(decoded, theirs);
     }
 
     #[test]
