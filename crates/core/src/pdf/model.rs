@@ -10,6 +10,7 @@ use crate::calc::{PriceMode, Totals};
 use crate::dates::ServiceDate;
 use crate::invoice::{InvoiceKind, LineDraft};
 use crate::masterdata::{Brand, Business, Customer};
+use crate::money::Cents;
 use crate::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -34,6 +35,8 @@ pub struct InvoiceDoc {
     pub cancels: Option<(String, NaiveDate)>,
     pub imported: bool,
     pub payment_received: bool,
+    /// Paid on the corrected invoice and moved to this replacement.
+    pub paid_before: Cents,
     pub logo_sha256: Option<String>,
     /// When the snapshot was frozen; `None` for drafts.
     pub issued_at: Option<String>,
@@ -75,6 +78,8 @@ struct Snapshot {
     imported: bool,
     #[serde(default)]
     payment_received: bool,
+    #[serde(default)]
+    paid_before: i64,
 }
 
 impl InvoiceDoc {
@@ -101,6 +106,7 @@ impl InvoiceDoc {
             cancels: s.cancels.map(|c| (c.number, c.invoice_date)),
             imported: s.imported,
             payment_received: s.payment_received,
+            paid_before: Cents(s.paid_before),
             logo_sha256: s.logo_sha256,
             issued_at: created_at.map(str::to_string),
         })

@@ -95,6 +95,7 @@ pub(crate) mod tests {
         let mut brand = get_brand(db.read(), brand_id).unwrap();
         brand.logo = Some(PNG.to_vec());
         brand.logo_mime = Some("image/png".into());
+        brand.iban = "DE12 3456 7890 1234 5678 90".into();
         db.write(|tx| update_brand(tx, &clock(), &brand)).unwrap();
         let customer = db
             .write(|tx| create_customer(tx, &clock(), sample_customer()))
@@ -160,6 +161,54 @@ pub(crate) mod tests {
         let invoice = load_invoice(db.read(), id).unwrap();
         assert_eq!((invoice.state, invoice.number), (InvoiceState::Draft, None));
         assert_eq!(issue(&mut db, id).unwrap().number, "RE-2026-0001");
+    }
+
+    /// Issues `id`, pays `paid` cents on it, corrects it and issues the
+    /// replacement; returns the replacement's archived PDF text.
+    fn replacement_text(paid: i64) -> String {
+        use crate::payments::{PaymentMethod, add_payment};
+        let mut db = Db::open_in_memory().unwrap();
+        let (_, _, id) = setup(&mut db);
+        issue(&mut db, id).unwrap();
+        db.write(|tx| {
+            add_payment(
+                tx,
+                &clock(),
+                id,
+                crate::money::Cents(paid),
+                crate::testutil::d(2026, 11, 18),
+                PaymentMethod::Transfer,
+                "",
+            )
+        })
+        .unwrap();
+        let replacement = db
+            .write(|tx| crate::storno::correct_invoice(tx, &clock(), id))
+            .unwrap()
+            .1;
+        issue(&mut db, replacement).unwrap();
+        text_of(&archived(&db, replacement).0.unwrap())
+    }
+
+    #[test]
+    fn replacement_of_paid_invoice_prints_received() {
+        let text = replacement_text(2975);
+        assert!(text.contains("Betrag dankend erhalten."), "{text}");
+        assert!(!text.contains("Bitte überweisen"), "{text}");
+    }
+
+    #[test]
+    fn replacement_of_partly_paid_invoice_asks_for_rest() {
+        let text = replacement_text(1000);
+        for needed in [
+            "bereits bezahlt",
+            "-10,00 €",
+            "noch offen",
+            "19,75 €",
+            "Bitte überweisen Sie 19,75 €",
+        ] {
+            assert!(text.contains(needed), "missing {needed:?} in\n{text}");
+        }
     }
 
     #[test]

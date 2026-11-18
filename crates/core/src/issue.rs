@@ -122,7 +122,14 @@ pub fn issue_invoice(
     };
     let number = allocate_number(tx, business.id, prefix, invoice.invoice_date.year())?;
     let mut snapshot = build_snapshot(tx, &invoice, &number, &totals, false)?;
-    snapshot["payment_received"] = opts.payment_received.into();
+    // A replacement takes over what was paid on the corrected invoice.
+    let paid_before = match invoice.replaces_id {
+        Some(original) => transferable(tx, original)?,
+        None => Cents::ZERO,
+    };
+    let fully_paid = totals.gross > Cents::ZERO && paid_before >= totals.gross;
+    snapshot["payment_received"] = (opts.payment_received || fully_paid).into();
+    snapshot["paid_before"] = paid_before.0.into();
 
     let now = timestamp(clock);
     tx.execute(
@@ -259,6 +266,16 @@ fn normalise_small_business_lines(tx: &Transaction, invoice: &mut Invoice) -> Re
         line.tax = tax.clone();
     }
     Ok(())
+}
+
+/// What `transfer_payments` will move from invoice `from`.
+fn transferable(tx: &Transaction, from: Uuid) -> Result<Cents> {
+    Ok(Cents(tx.query_row(
+        "SELECT COALESCE(SUM(amount_cents), 0) FROM payments
+         WHERE invoice_id = ?1 AND transferred_to_id IS NULL",
+        [from.to_string()],
+        |r| r.get(0),
+    )?))
 }
 
 /// Moves the payments of a corrected invoice to its replacement. The copies

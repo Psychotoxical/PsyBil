@@ -457,6 +457,11 @@ pub(crate) mod tests {
         dress(&mut small);
         small.payment_received = true;
         save("7-kleinunternehmer-bezahlt", &small);
+
+        let mut replacement = doc.clone();
+        replacement.number = Some("RE-2026-0003".into());
+        replacement.paid_before = crate::money::Cents(1000);
+        save("8-ersatz-teilbezahlt", &replacement);
     }
 
     #[test]

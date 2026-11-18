@@ -711,7 +711,37 @@ impl<'a> Builder<'a> {
 
     // ----------------------------------------------------------------- totals
 
+    /// Part of the total already paid on a corrected invoice, when it does
+    /// not cover the whole amount.
+    fn partly_paid(&self) -> Option<Cents> {
+        let (paid, gross) = (self.doc.paid_before, self.doc.totals.gross);
+        (!self.doc.payment_received && paid > Cents::ZERO && paid < gross).then_some(paid)
+    }
+
+    /// What is still to be paid.
+    fn amount_due(&self) -> Cents {
+        let gross = self.doc.totals.gross;
+        match self.partly_paid() {
+            Some(paid) => Cents(gross.0 - paid.0),
+            None => gross,
+        }
+    }
+
     fn total_rows(&self) -> Vec<(String, String, bool)> {
+        let mut rows = self.tax_rows();
+        if let Some(paid) = self.partly_paid() {
+            let l = self.labels;
+            rows.push((l.paid_before.to_string(), self.money(Cents(-paid.0)), false));
+            rows.push((
+                l.still_open.to_string(),
+                self.money(self.amount_due()),
+                true,
+            ));
+        }
+        rows
+    }
+
+    fn tax_rows(&self) -> Vec<(String, String, bool)> {
         let (doc, l) = (self.doc, self.labels);
         let total = (l.total.to_string(), self.money(doc.totals.gross), true);
         if self.small {
@@ -780,7 +810,7 @@ impl<'a> Builder<'a> {
                 fill(
                     l.pay_transfer,
                     &[
-                        ("amount", &self.money(doc.totals.gross)),
+                        ("amount", &self.money(self.amount_due())),
                         ("due", &due),
                         ("number", &self.number_text()),
                     ],
