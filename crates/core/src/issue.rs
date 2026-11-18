@@ -17,14 +17,16 @@ use crate::tax::{TaxCategory, TaxChoice};
 use crate::validate::{Severity, check_issue};
 use crate::{Error, Result};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct IssueOptions {
     /// The full amount has already been paid; records a payment dated on
     /// the invoice date.
     pub payment_received: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Issued {
     pub number: String,
     pub totals: Totals,

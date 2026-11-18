@@ -16,6 +16,7 @@ use crate::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum PaymentMethod {
     Transfer,
     Cash,
@@ -49,6 +50,7 @@ impl PaymentMethod {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Payment {
     pub id: Uuid,
     pub invoice_id: Uuid,
@@ -175,6 +177,7 @@ pub fn list_payments(conn: &Connection, invoice_id: Uuid) -> Result<Vec<Payment>
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum StatusKind {
     Draft,
     Open,
@@ -185,6 +188,7 @@ pub enum StatusKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct InvoiceStatus {
     pub kind: StatusKind,
     /// Still to pay; negative when overpaid.

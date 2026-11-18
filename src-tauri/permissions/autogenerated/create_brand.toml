@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-create-brand"
+description = "Enables the create_brand command without any pre-configured scope."
+commands.allow = ["create_brand"]
+
+[[permission]]
+identifier = "deny-create-brand"
+description = "Denies the create_brand command without any pre-configured scope."
+commands.deny = ["create_brand"]

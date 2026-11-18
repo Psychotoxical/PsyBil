@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-invoices"
+description = "Enables the list_invoices command without any pre-configured scope."
+commands.allow = ["list_invoices"]
+
+[[permission]]
+identifier = "deny-list-invoices"
+description = "Denies the list_invoices command without any pre-configured scope."
+commands.deny = ["list_invoices"]

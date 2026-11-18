@@ -18,12 +18,15 @@ use crate::{Error, Result};
 
 /// One line of an invoice as entered.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct LineDraft {
     pub kind: LineKind,
     pub product_id: Option<Uuid>,
     pub description: String,
+    #[cfg_attr(test, ts(type = "string"))]
     pub quantity: Decimal,
     pub unit: String,
+    #[cfg_attr(test, ts(type = "string"))]
     pub unit_price: Decimal,
     pub tax: TaxChoice,
 }
@@ -39,8 +42,46 @@ impl LineDraft {
     }
 }
 
+/// A catalogue product as a new line of a draft with `mode` prices.
+///
+/// A product priced in the other mode is converted with its standard rate,
+/// to four decimal places, so that one unit comes back to the catalogue
+/// price. Without a rate (exempt, following the goods …) the price stays.
+pub fn product_line(product: &crate::masterdata::Product, mode: PriceMode) -> LineDraft {
+    let rate = match &product.tax {
+        TaxChoice::Fixed(crate::tax::TaxCategory::Standard { rate }) => *rate,
+        _ => Decimal::ZERO,
+    };
+    let factor = Decimal::ONE + rate / Decimal::ONE_HUNDRED;
+    let unit_price = match (product.price_mode, mode) {
+        (PriceMode::Gross, PriceMode::Net) if !rate.is_zero() => product.price / factor,
+        (PriceMode::Net, PriceMode::Gross) if !rate.is_zero() => product.price * factor,
+        _ => product.price,
+    }
+    .round_dp_with_strategy(
+        crate::money::MAX_INPUT_SCALE,
+        rust_decimal::RoundingStrategy::MidpointAwayFromZero,
+    )
+    .normalize();
+    let description = if product.description.trim().is_empty() {
+        product.name.clone()
+    } else {
+        format!("{}\n{}", product.name, product.description.trim())
+    };
+    LineDraft {
+        kind: LineKind::Item,
+        product_id: Some(product.id),
+        description,
+        quantity: Decimal::ONE,
+        unit: product.unit.clone(),
+        unit_price,
+        tax: product.tax.clone(),
+    }
+}
+
 /// Everything that can be edited in a draft.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct DraftInput {
     pub brand_id: Uuid,
     pub customer_id: Option<Uuid>,
@@ -57,6 +98,7 @@ pub struct DraftInput {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum InvoiceState {
     Draft,
     Issued,
@@ -64,6 +106,7 @@ pub enum InvoiceState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum InvoiceKind {
     Invoice,
     Storno,
@@ -71,6 +114,7 @@ pub enum InvoiceKind {
 
 /// A stored invoice (draft or issued).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Invoice {
     pub id: Uuid,
     pub business_id: Uuid,
@@ -368,6 +412,87 @@ mod tests {
     use crate::masterdata::{NewBusiness, create_business, create_customer};
     use crate::money::{Cents, parse_decimal};
     use crate::testutil::{clock, d, sample_business, sample_customer, sample_draft};
+
+    fn shirt(price: Decimal, mode: PriceMode, tax: TaxChoice) -> crate::masterdata::Product {
+        crate::masterdata::Product {
+            id: Uuid::new_v4(),
+            brand_id: Uuid::new_v4(),
+            name: "Shirt".into(),
+            description: "Baumwolle".into(),
+            kind: crate::masterdata::ProductKind::Goods,
+            unit: "Stück".into(),
+            price,
+            price_mode: mode,
+            tax,
+            stock: None,
+            active: true,
+        }
+    }
+
+    fn standard(rate: Decimal) -> TaxChoice {
+        TaxChoice::Fixed(crate::tax::TaxCategory::Standard { rate })
+    }
+
+    #[test]
+    fn product_line_keeps_price_in_same_mode() {
+        let product = shirt(
+            Decimal::from(20),
+            PriceMode::Gross,
+            standard(Decimal::from(19)),
+        );
+        let line = product_line(&product, PriceMode::Gross);
+        assert_eq!(line.kind, LineKind::Item);
+        assert_eq!(line.product_id, Some(product.id));
+        assert_eq!(line.description, "Shirt\nBaumwolle");
+        assert_eq!(line.quantity, Decimal::ONE);
+        assert_eq!(line.unit, "Stück");
+        assert_eq!(line.unit_price, Decimal::from(20));
+        assert_eq!(line.tax, product.tax);
+    }
+
+    #[test]
+    fn product_line_converts_between_net_and_gross() {
+        let gross = shirt(
+            Decimal::from(20),
+            PriceMode::Gross,
+            standard(Decimal::from(19)),
+        );
+        let line = product_line(&gross, PriceMode::Net);
+        assert_eq!(line.unit_price, parse_decimal("16,8067").unwrap());
+        // One unit at that net price comes back to the catalogue's 20,00 € gross.
+        let totals = calculate(&[line.to_input()], PriceMode::Net, false).unwrap();
+        assert_eq!(totals.gross, Cents(2000));
+
+        let net = shirt(
+            parse_decimal("16,81").unwrap(),
+            PriceMode::Net,
+            standard(Decimal::from(7)),
+        );
+        assert_eq!(
+            product_line(&net, PriceMode::Gross).unit_price,
+            parse_decimal("17,9867").unwrap()
+        );
+    }
+
+    #[test]
+    fn product_line_without_rate_keeps_price() {
+        let exempt = shirt(
+            Decimal::from(50),
+            PriceMode::Gross,
+            TaxChoice::Fixed(crate::tax::TaxCategory::Exempt {
+                reason: "§ 4".into(),
+            }),
+        );
+        assert_eq!(
+            product_line(&exempt, PriceMode::Net).unit_price,
+            Decimal::from(50)
+        );
+        let mut plain = shirt(Decimal::from(5), PriceMode::Net, TaxChoice::FollowGoods);
+        plain.description = String::new();
+        let line = product_line(&plain, PriceMode::Gross);
+        assert_eq!(line.unit_price, Decimal::from(5));
+        assert_eq!(line.description, "Shirt");
+    }
 
     fn setup(business: NewBusiness) -> (Db, Uuid, Uuid) {
         let mut db = Db::open_in_memory().unwrap();

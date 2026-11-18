@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-draft-totals"
+description = "Enables the draft_totals command without any pre-configured scope."
+commands.allow = ["draft_totals"]
+
+[[permission]]
+identifier = "deny-draft-totals"
+description = "Denies the draft_totals command without any pre-configured scope."
+commands.deny = ["draft_totals"]

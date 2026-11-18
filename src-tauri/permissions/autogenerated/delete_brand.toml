@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-brand"
+description = "Enables the delete_brand command without any pre-configured scope."
+commands.allow = ["delete_brand"]
+
+[[permission]]
+identifier = "deny-delete-brand"
+description = "Denies the delete_brand command without any pre-configured scope."
+commands.deny = ["delete_brand"]

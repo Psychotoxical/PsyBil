@@ -52,6 +52,16 @@ pub fn export_pdf(conn: &Connection, id: Uuid, target: &Path) -> Result<PathBuf>
     Ok(target.to_path_buf())
 }
 
+/// The file name for invoice `id`, draft or issued.
+pub fn pdf_file_name_for(conn: &Connection, id: Uuid) -> Result<String> {
+    let invoice = crate::invoice::load_invoice(conn, id)?;
+    let doc = match invoice.state {
+        crate::invoice::InvoiceState::Draft => crate::pdf::model::draft_doc(conn, id)?,
+        crate::invoice::InvoiceState::Issued => crate::pdf::model::issued_doc(conn, id)?,
+    };
+    Ok(pdf_file_name(&doc))
+}
+
 /// Turns any text into a safe file name stem: letters, digits, `-` and `.`
 /// stay, everything else becomes one `_`.
 fn safe_stem(raw: &str) -> String {
@@ -120,6 +130,30 @@ mod tests {
         db.write(|tx| issue_invoice(tx, &clock(), id, IssueOptions::default()))
             .unwrap();
         id
+    }
+
+    #[test]
+    fn pdf_file_name_for_draft_and_issued() {
+        let mut db = Db::open_in_memory().unwrap();
+        let (_, brand) = db
+            .write(|tx| create_business(tx, &clock(), sample_business()))
+            .unwrap();
+        let customer = db
+            .write(|tx| create_customer(tx, &clock(), sample_customer()))
+            .unwrap();
+        let id = db
+            .write(|tx| create_draft(tx, &clock(), sample_draft(brand, Some(customer))))
+            .unwrap();
+        assert_eq!(
+            pdf_file_name_for(db.read(), id).unwrap(),
+            "Entwurf_Kunde_A.pdf"
+        );
+        db.write(|tx| issue_invoice(tx, &clock(), id, IssueOptions::default()))
+            .unwrap();
+        assert_eq!(
+            pdf_file_name_for(db.read(), id).unwrap(),
+            "RE-2026-0001_Kunde_A.pdf"
+        );
     }
 
     #[test]

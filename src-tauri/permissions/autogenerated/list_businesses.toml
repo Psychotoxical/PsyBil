@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-businesses"
+description = "Enables the list_businesses command without any pre-configured scope."
+commands.allow = ["list_businesses"]
+
+[[permission]]
+identifier = "deny-list-businesses"
+description = "Denies the list_businesses command without any pre-configured scope."
+commands.deny = ["list_businesses"]

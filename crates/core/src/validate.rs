@@ -18,6 +18,7 @@ pub const SMALL_AMOUNT_LIMIT: Cents = Cents(25_000);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum Severity {
     /// Blocks issuing.
     Error,
@@ -27,6 +28,7 @@ pub enum Severity {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum IssueKind {
     BusinessName,
     BusinessAddress,
@@ -46,6 +48,7 @@ pub enum IssueKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Issue {
     pub kind: IssueKind,
     pub severity: Severity,

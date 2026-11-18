@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-create-business"
+description = "Enables the create_business command without any pre-configured scope."
+commands.allow = ["create_business"]
+
+[[permission]]
+identifier = "deny-create-business"
+description = "Denies the create_business command without any pre-configured scope."
+commands.deny = ["create_business"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-issue-invoice"
+description = "Enables the issue_invoice command without any pre-configured scope."
+commands.allow = ["issue_invoice"]
+
+[[permission]]
+identifier = "deny-issue-invoice"
+description = "Denies the issue_invoice command without any pre-configured scope."
+commands.deny = ["issue_invoice"]
