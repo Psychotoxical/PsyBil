@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-attach-original-pdf"
+description = "Enables the attach_original_pdf command without any pre-configured scope."
+commands.allow = ["attach_original_pdf"]
+
+[[permission]]
+identifier = "deny-attach-original-pdf"
+description = "Denies the attach_original_pdf command without any pre-configured scope."
+commands.deny = ["attach_original_pdf"]

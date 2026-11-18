@@ -41,7 +41,7 @@ pub fn add_payment_inner(
     state.write(|tx| payments::add_payment(tx, &SystemClock, invoice_id, cents, date, method, note))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn add_payment(
     state: State<'_, AppState>,
     invoice_id: Uuid,
@@ -53,12 +53,12 @@ pub fn add_payment(
     add_payment_inner(&state, invoice_id, &amount, date, method, &note)
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn list_payments(state: State<'_, AppState>, invoice_id: Uuid) -> CmdResult<Vec<Payment>> {
     state.read(|c| payments::list_payments(c, invoice_id))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn delete_payment(state: State<'_, AppState>, id: Uuid) -> CmdResult<()> {
     state.write(|tx| payments::delete_payment(tx, &SystemClock, id))
 }

@@ -14,6 +14,7 @@ use crate::legacy::read::{LegacyCustomer, LegacyData, LegacyInvoice};
 /// How an old invoice is taken over. VibeBill only stored a hand-set
 /// status, so the user confirms this per invoice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum LegacyClass {
     /// Never sent: becomes a draft without number.
     NeverSent,
@@ -23,6 +24,7 @@ pub enum LegacyClass {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum ReviewReason {
     /// Stored net + tax is not the stored gross.
     TotalsMismatch,
@@ -37,8 +39,10 @@ pub enum ReviewReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct PlannedBusiness {
     /// Old sellers that become brands of this business.
+    #[cfg_attr(test, ts(type = "Array<number>"))]
     pub sellers: Vec<i64>,
     pub name: String,
     pub small_business: bool,
@@ -49,7 +53,9 @@ pub struct PlannedBusiness {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct PlannedInvoice {
+    #[cfg_attr(test, ts(type = "number"))]
     pub legacy_id: i64,
     pub number: String,
     pub class: LegacyClass,
@@ -57,12 +63,15 @@ pub struct PlannedInvoice {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ImportPlan {
     pub businesses: Vec<PlannedBusiness>,
     pub invoices: Vec<PlannedInvoice>,
     /// Old customer id → an existing PsyBil customer to reuse.
+    #[cfg_attr(test, ts(type = "Array<[number, string | null]>"))]
     pub customer_matches: Vec<(i64, Option<Uuid>)>,
     /// Old product id → an existing PsyBil product to reuse.
+    #[cfg_attr(test, ts(type = "Array<[number, string | null]>"))]
     pub product_matches: Vec<(i64, Option<Uuid>)>,
 }
 
@@ -248,6 +257,43 @@ pub fn plan_import(conn: &Connection, data: &LegacyData) -> Result<ImportPlan> {
     })
 }
 
+/// One old invoice as the review table shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+pub struct LegacyInvoiceRow {
+    #[cfg_attr(test, ts(type = "number"))]
+    pub legacy_id: i64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub seller_id: i64,
+    pub number: String,
+    pub date: String,
+    pub customer: String,
+    /// The gross amount VibeBill stored, in cents.
+    pub gross: crate::money::Cents,
+    pub old_status: String,
+}
+
+/// The old invoices with customer name and stored gross amount.
+pub fn invoice_rows(data: &LegacyData) -> Vec<LegacyInvoiceRow> {
+    data.invoices
+        .iter()
+        .map(|i| LegacyInvoiceRow {
+            legacy_id: i.id,
+            seller_id: i.seller_id,
+            number: i.invoice_number.clone(),
+            date: i.date.clone(),
+            customer: data
+                .customers
+                .iter()
+                .find(|c| c.id == i.customer_id)
+                .map(|c| c.name.clone())
+                .unwrap_or_default(),
+            gross: crate::legacy::apply::cents(i.total_gross),
+            old_status: i.status.clone(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,6 +318,28 @@ mod tests {
 
     fn invoice(plan: &ImportPlan, id: i64) -> &PlannedInvoice {
         plan.invoices.iter().find(|i| i.legacy_id == id).unwrap()
+    }
+
+    #[test]
+    fn invoice_rows_name_customer_and_amount() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vibebill.db");
+        full_db(&path);
+        let data = read_legacy(&path, dir.path()).unwrap();
+        let rows = invoice_rows(&data);
+        assert_eq!(rows.len(), data.invoices.len());
+        let first = rows.iter().find(|r| r.legacy_id == 1).unwrap();
+        let old = data.invoices.iter().find(|i| i.id == 1).unwrap();
+        assert_eq!(first.number, old.invoice_number);
+        assert_eq!(first.seller_id, old.seller_id);
+        assert_eq!(first.old_status, old.status);
+        assert_eq!(first.gross, crate::legacy::apply::cents(old.total_gross));
+        let customer = data
+            .customers
+            .iter()
+            .find(|c| c.id == old.customer_id)
+            .unwrap();
+        assert_eq!(first.customer, customer.name);
     }
 
     #[test]

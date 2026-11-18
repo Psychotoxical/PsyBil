@@ -1,14 +1,16 @@
 import "./invoices.css";
-import { ArrowDown, ArrowUp, ArrowUpDown, Ban, Plus } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Ban, FileSpreadsheet, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { formatCents, formatDate } from "../../format";
 import type { Business } from "../../ipc/bindings/Business";
 import type { InvoiceRow } from "../../ipc/bindings/InvoiceRow";
 import { messageFor, toCmdError } from "../../ipc/errors";
+import { exportFileName, exportInvoicesCsv } from "../../ipc/exports";
 import { listInvoices } from "../../ipc/invoices";
 import { listBusinesses } from "../../ipc/masterdata";
 import { PageHeader } from "../../shell/PageHeader";
+import { saveExport } from "../../shell/saveExport";
 import { EMPTY_FILTER, type SortKey, sortRows, useInvoices } from "../../store/invoices";
 import { useUi } from "../../store/ui";
 import { StatusBadge } from "../../ui/StatusBadge";
@@ -56,10 +58,24 @@ export function InvoiceList() {
     };
   }, [filter, toast, t]);
 
-  const currency = (row: InvoiceRow) =>
-    businesses.find((b) => b.id === row.business_id)?.currency ?? "EUR";
   const senderName = (row: InvoiceRow) =>
     businesses.find((b) => b.id === row.business_id)?.name ?? "";
+  const exportCsv = async () => {
+    try {
+      const name = await exportFileName("invoices_csv");
+      // The file holds what the list shows: the filter as it is set now.
+      const current = useInvoices.getState().filter;
+      await saveExport(t, {
+        name,
+        type: "CSV",
+        extension: "csv",
+        write: (path) => exportInvoicesCsv(current, path),
+      });
+    } catch (error) {
+      toast("error", messageFor(toCmdError(error), t));
+    }
+  };
+
   const open = (row: InvoiceRow) =>
     navigate(
       row.state === "draft" ? { page: "assistant", id: row.id } : { page: "issued", id: row.id },
@@ -81,7 +97,17 @@ export function InvoiceList() {
 
   return (
     <>
-      <PageHeader title={t("Invoices")} />
+      <PageHeader
+        title={t("Invoices")}
+        actions={
+          !none && (
+            <button type="button" className="btn" onClick={() => void exportCsv()}>
+              <FileSpreadsheet size={16} aria-hidden="true" />
+              {t("Export CSV…")}
+            </button>
+          )
+        }
+      />
       {none ? (
         <div className="empty">
           <h2>{t("No invoices yet")}</h2>
@@ -170,7 +196,7 @@ export function InvoiceList() {
                     <td className="customer">
                       {r.customer_name ?? <span className="muted">{t("No customer yet")}</span>}
                     </td>
-                    <td className="num end">{formatCents(r.gross, currency(r), lang)}</td>
+                    <td className="num end">{formatCents(r.gross, r.currency, lang)}</td>
                     <td>
                       {r.kind === "storno" ? (
                         <span className="badge storno">

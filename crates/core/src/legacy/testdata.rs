@@ -111,3 +111,18 @@ pub fn early_db(path: &Path) {
     )
     .unwrap();
 }
+
+#[cfg(test)]
+mod tests {
+    /// Writes a synthetic VibeBill database to `PSYBIL_SAMPLES/vibebill.db`,
+    /// for trying the import assistant by hand.
+    #[test]
+    #[ignore]
+    fn write_sample_legacy_db() {
+        let dir = std::path::PathBuf::from(std::env::var("PSYBIL_SAMPLES").unwrap());
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("vibebill.db");
+        let _ = std::fs::remove_file(&path);
+        super::full_db(&path);
+    }
+}

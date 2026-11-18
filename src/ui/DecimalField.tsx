@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Field } from "./Field";
+import { describedBy, Field } from "./Field";
 import { decimals, formatDecimal, numberLang, parseDecimal } from "./number";
 
 export type DecimalProps = {
@@ -53,7 +53,7 @@ export function DecimalField({
         autoComplete="off"
         value={text}
         aria-invalid={invalid || undefined}
-        aria-describedby={hint ? `${id}-hint` : undefined}
+        aria-describedby={describedBy(id, hint, unit)}
         onFocus={() => {
           focused.current = true;
         }}

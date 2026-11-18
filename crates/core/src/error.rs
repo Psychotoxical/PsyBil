@@ -49,6 +49,14 @@ pub enum Error {
     Import(String),
     #[error("merge failed: {0}")]
     Merge(String),
+    #[error("the backup is damaged: {0}")]
+    BackupDamaged(String),
+    #[error("the file is not a PsyBil backup")]
+    NotABackup,
+    #[error("the shared folder has no PsyBil data file; it may not be synced yet")]
+    SharedFileMissing,
+    #[error("the data is not open")]
+    DataNotOpen,
     #[error("PDF failed: {0}")]
     Pdf(String),
     #[error("in use by an issued invoice")]

@@ -36,6 +36,22 @@
   color: var(--ok-text);
 }
 
+/* Levels of the small-business meter and things to check: word, icon and tint. */
+.badge.level.ok {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+.badge.level.warning,
+.badge.check {
+  background: var(--warning-bg);
+}
+
+.badge.level.over {
+  background: var(--bad-bg);
+  color: var(--bad-text);
+}
+
 .badge.overdue {
   background: var(--bad-bg);
   color: var(--bad-text);

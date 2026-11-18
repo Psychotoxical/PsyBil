@@ -513,3 +513,194 @@
   margin: 0;
   max-width: 65ch;
 }
+
+/* A message with one action, e.g. "Show in folder". */
+.toast:has(.toast-action) {
+  grid-template-columns: auto 1fr auto auto;
+}
+
+.toast-action {
+  height: 30px;
+  padding: 0 var(--space-3);
+  white-space: nowrap;
+}
+
+/* Lock banner: above the page while another computer writes */
+.lock-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--warning-bg);
+  color: var(--text);
+}
+
+.lock-banner-text {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.lock-banner-text p {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.lock-banner-text svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.lock-banner-note {
+  padding-left: 24px;
+  font-size: 13px;
+}
+
+.lock-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* The data cannot be opened */
+.problem {
+  max-width: 60ch;
+}
+
+.problem-path {
+  overflow-wrap: anywhere;
+}
+
+.problem-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* Merge report */
+.merge-section {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.merge-section h3 {
+  font-size: 15px;
+}
+
+.merge-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+
+.merge-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 44px;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.merge-list.warn li {
+  justify-content: flex-start;
+}
+
+.merge-list.warn svg {
+  flex: none;
+  color: var(--error);
+}
+
+.merge-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.welcome-answers {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Settings: data folder and backups */
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.data-place {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 500;
+}
+
+.data-place-dir {
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.backup-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+
+.backup-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-1) 0 var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.backup-kind {
+  color: var(--text-secondary);
+}
+
+.welcome-legacy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.welcome-legacy p {
+  margin: 0;
+}
+
+/* Secondary buttons keep their shape on the banner's tint. */
+.lock-banner .btn:not(.primary) {
+  border-color: var(--border-field);
+  background: var(--bg-app);
+}
+
+.lock-banner .btn:not(.primary):hover {
+  background: var(--bg-button);
+}
+
+/* The second line of a list item is too faint on the hover tone in Latte (4.05 : 1). */
+.split-item:hover .split-item-sub,
+.split-item[aria-current="true"] .split-item-sub {
+  color: var(--text);
+}
+
+/* A message with an action gets room for a file name on one line. */
+.toast:has(.toast-action) {
+  min-width: min(440px, calc(100vw - 2 * var(--space-5)));
+}

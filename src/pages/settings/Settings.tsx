@@ -3,7 +3,10 @@ import { LANGUAGES, type Language } from "../../i18n";
 import type { ThemeChoice } from "../../ipc/bindings/ThemeChoice";
 import { PageHeader } from "../../shell/PageHeader";
 import { useSettings } from "../../store/settings";
+import { useUi } from "../../store/ui";
 import { Choice } from "../../ui/Choice";
+import { BackupSection } from "./BackupSection";
+import { DataPlaceSection } from "./DataPlaceSection";
 
 /** Appearance and language of this computer, and what PsyBil is. */
 export function Settings() {
@@ -34,6 +37,27 @@ export function Settings() {
             onChange={(v) => update({ language: v })}
             options={LANGUAGES.map(([value, label]) => ({ value, label }))}
           />
+        </section>
+
+        <DataPlaceSection />
+        <BackupSection />
+
+        <section className="form-section">
+          <h2 className="settings-title">{t("Take over from VibeBill")}</h2>
+          <p className="field-hint">
+            {t(
+              "Takes over senders, customers, items and invoices from VibeBill. The old data is only read.",
+            )}
+          </p>
+          <div className="settings-actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => useUi.getState().navigate({ page: "import" })}
+            >
+              {t("Take over from VibeBill…")}
+            </button>
+          </div>
         </section>
 
         <section className="form-section about">

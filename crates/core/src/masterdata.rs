@@ -244,6 +244,18 @@ pub fn delete_business(tx: &Transaction, clock: &dyn Clock, id: Uuid) -> Result<
         "DELETE FROM number_counters WHERE business_id = ?1",
         [id.to_string()],
     )?;
+    let revenue: Vec<Uuid> = {
+        let mut stmt = tx.prepare("SELECT id FROM outside_revenue WHERE business_id = ?1")?;
+        stmt.query_map([id.to_string()], |r| crate::db::uuid_col(r, 0))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    for row in revenue {
+        tx.execute(
+            "DELETE FROM outside_revenue WHERE id = ?1",
+            [row.to_string()],
+        )?;
+        mark_deleted(tx, clock, "outside_revenue", row)?;
+    }
     tx.execute("DELETE FROM businesses WHERE id = ?1", [id.to_string()])?;
     mark_deleted(tx, clock, "businesses", id)?;
     audit::log(tx, clock, "business", id, "delete", serde_json::Value::Null)

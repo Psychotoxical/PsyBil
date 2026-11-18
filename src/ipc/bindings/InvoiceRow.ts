@@ -4,4 +4,4 @@ import type { InvoiceKind } from "./InvoiceKind";
 import type { InvoiceState } from "./InvoiceState";
 import type { InvoiceStatus } from "./InvoiceStatus";
 
-export type InvoiceRow = { id: string, number: string | null, kind: InvoiceKind, state: InvoiceState, business_id: string, brand_id: string, customer_name: string | null, invoice_date: string, due_date: string, gross: Cents, status: InvoiceStatus, };
+export type InvoiceRow = { id: string, number: string | null, kind: InvoiceKind, state: InvoiceState, business_id: string, brand_id: string, customer_name: string | null, invoice_date: string, due_date: string, gross: Cents, currency: string, status: InvoiceStatus, };

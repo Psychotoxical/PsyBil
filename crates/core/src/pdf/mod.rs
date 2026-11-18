@@ -12,8 +12,11 @@ pub mod model;
 pub mod preview;
 pub(crate) mod render;
 
+pub mod year_report;
+
 pub use archive::invoice_pdf;
 pub use export::{export_pdf, pdf_file_name};
+pub use locale::Lang;
 pub use render::render_invoice;
 
 #[cfg(test)]

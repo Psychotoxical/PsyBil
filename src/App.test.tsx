@@ -5,6 +5,7 @@ import { setLanguage } from "./i18n";
 import type { DraftInput } from "./ipc/bindings/DraftInput";
 import { saveDraft } from "./ipc/invoices";
 import { useDraft } from "./store/draft";
+import { useUi } from "./store/ui";
 
 type CloseHandler = () => Promise<void>;
 const close: { handler?: CloseHandler } = {};
@@ -45,6 +46,31 @@ describe("App", () => {
     render(<App />);
     expect(screen.getByRole("navigation", { name: "Hauptmenü" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Rechnungen/ })).toBeInTheDocument();
+  });
+
+  it("ctrl_n_ignored_while_dialog_open", async () => {
+    setLanguage("de");
+    useUi.setState({ route: { page: "overview" } });
+    render(<App />);
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    document.body.appendChild(dialog);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "n", ctrlKey: true }));
+    expect(useUi.getState().route).toEqual({ page: "overview" });
+    dialog.remove();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "n", ctrlKey: true }));
+    await waitFor(() => expect(useUi.getState().route).toEqual({ page: "assistant" }));
+    useUi.setState({ route: { page: "overview" } });
+  });
+
+  it("f1_opens_help", async () => {
+    setLanguage("de");
+    render(<App />);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "F1" }));
+    await waitFor(() => expect(useUi.getState().route).toEqual({ page: "help" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Hilfe" })).toBeInTheDocument();
+    useUi.setState({ route: { page: "overview" } });
   });
 
   it("app_renders_shell_in_english", () => {

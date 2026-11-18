@@ -1,4 +1,4 @@
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +6,7 @@ import { setLanguage } from "../../i18n";
 import type { Invoice } from "../../ipc/bindings/Invoice";
 import type { Payment } from "../../ipc/bindings/Payment";
 import { cancelInvoice, correctInvoice, invoiceStatus, loadInvoice } from "../../ipc/invoices";
+import { attachOriginalPdf } from "../../ipc/legacy";
 import { listPayments } from "../../ipc/payments";
 import { exportPdf } from "../../ipc/pdf";
 import { Toasts } from "../../shell/Toasts";
@@ -42,7 +43,12 @@ const ISSUED: Invoice = {
   legacy_cancelled: false,
 };
 
-vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn(), open: vi.fn() }));
+vi.mock("../../ipc/legacy", () => ({
+  originalPdfName: vi.fn(async () => null),
+  attachOriginalPdf: vi.fn(async () => {}),
+  exportOriginalPdf: vi.fn(async (_id: string, path: string) => path),
+}));
 vi.mock("../../ipc/invoices", () => ({
   loadInvoice: vi.fn(async () => ISSUED),
   invoiceStatus: vi.fn().mockResolvedValue({ kind: "open", open: 1190, overdue: false }),
@@ -79,6 +85,32 @@ describe("IssuedView", () => {
     vi.mocked(loadInvoice).mockImplementation(async () => ISSUED);
     vi.mocked(invoiceStatus).mockResolvedValue({ kind: "open", open: 1190, overdue: false });
     useUi.setState({ route: { page: "issued", id: "i1" }, toasts: [] });
+  });
+
+  it("fresh_issued_view_offers_correct", async () => {
+    renderView(true);
+    expect(await screen.findByRole("button", { name: "Korrigieren" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Zur Liste" })).toBeInTheDocument();
+  });
+
+  it("imported_invoice_offers_original_pdf", async () => {
+    const user = userEvent.setup();
+    vi.mocked(loadInvoice).mockResolvedValueOnce({ ...ISSUED, imported: true });
+    vi.mocked(open).mockResolvedValueOnce("C:/Temp/RE-alt.pdf");
+    renderView();
+    await user.click(
+      await screen.findByRole("button", { name: "Damals verschicktes PDF anhängen …" }),
+    );
+    await waitFor(() => expect(attachOriginalPdf).toHaveBeenCalledWith("i1", "C:/Temp/RE-alt.pdf"));
+    expect(
+      await screen.findByRole("button", { name: "Original-PDF speichern …" }),
+    ).toBeInTheDocument();
+  });
+
+  it("not_imported_invoice_has_no_original_pdf", async () => {
+    renderView();
+    await screen.findByRole("button", { name: "PDF speichern" });
+    expect(screen.queryByRole("button", { name: /Original-PDF|Damals verschickt/ })).toBeNull();
   });
 
   it("cancelled_invoice_shows_its_trail_and_takes_no_payment", async () => {

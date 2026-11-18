@@ -9,8 +9,8 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use rusqlite::{OptionalExtension, Transaction, params};
-use serde::Serialize;
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::audit;
@@ -19,19 +19,38 @@ use crate::db::{Db, uuid_col};
 use crate::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum Side {
     Local,
     Other,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ChangedBoth {
     pub table: String,
     pub id: Uuid,
     pub kept: Side,
+    /// Name or number of the record, for showing it.
+    pub label: String,
+    /// The row of the side that lost, for master data; `keep_other_version`
+    /// puts it back.
+    #[cfg_attr(test, ts(type = "Record<string, unknown> | null"))]
+    pub other: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+pub struct QuarantineEntry {
+    pub id: String,
+    pub kind: String,
+    pub reason: String,
+    pub number: Option<String>,
+    pub business_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct MergeReport {
     pub added: usize,
     pub updated: usize,
@@ -49,7 +68,13 @@ pub struct MergeReport {
     pub restored: Vec<(String, Uuid)>,
 }
 
-const MASTER_TABLES: [&str; 4] = ["businesses", "brands", "customers", "products"];
+const MASTER_TABLES: [&str; 5] = [
+    "businesses",
+    "brands",
+    "customers",
+    "products",
+    "outside_revenue",
+];
 
 /// A private folder for copies of the databases being merged.
 struct Scratch {
@@ -201,11 +226,7 @@ fn decide(
         Side::Local
     };
     if !has_base {
-        report.unclear.push(ChangedBoth {
-            table: table.into(),
-            id,
-            kept: newer,
-        });
+        report.unclear.push(changed(tx, table, id, newer)?);
         return Ok(newer);
     }
     let base_at = updated_at(tx, "base", table, id)?;
@@ -215,14 +236,172 @@ fn decide(
         (false, _) => Side::Other,
         (true, false) => Side::Local,
         (true, true) => {
-            report.changed_both.push(ChangedBoth {
-                table: table.into(),
-                id,
-                kept: newer,
-            });
+            report.changed_both.push(changed(tx, table, id, newer)?);
             newer
         }
     })
+}
+
+/// A row both sides changed, with its name and, for master data, the
+/// version that is about to lose.
+fn changed(tx: &Transaction, table: &str, id: Uuid, kept: Side) -> Result<ChangedBoth> {
+    let label_sql = match table {
+        "outside_revenue" => "SELECT b.name || ' ' || o.year FROM main.outside_revenue o
+             JOIN main.businesses b ON b.id = o.business_id WHERE o.id = ?1"
+            .to_string(),
+        "invoices" => {
+            "SELECT COALESCE(number, invoice_date) FROM main.invoices WHERE id = ?1".to_string()
+        }
+        _ => format!("SELECT name FROM main.{table} WHERE id = ?1"),
+    };
+    let label: String = tx
+        .query_row(&label_sql, [id.to_string()], |r| r.get(0))
+        .optional()?
+        .unwrap_or_default();
+    let other = if MASTER_TABLES.contains(&table) {
+        let losing = match kept {
+            Side::Other => "main",
+            Side::Local => "other",
+        };
+        let rows = rows_json(
+            tx,
+            &format!("SELECT * FROM {losing}.{table} WHERE id = ?1"),
+            id,
+        )?;
+        rows.as_array().and_then(|r| r.first()).cloned()
+    } else {
+        None
+    };
+    Ok(ChangedBoth {
+        table: table.into(),
+        id,
+        kept,
+        label,
+        other,
+    })
+}
+
+/// Puts back the version of a master data row that lost in a merge.
+pub fn keep_other_version(
+    tx: &Transaction,
+    clock: &dyn Clock,
+    table: &str,
+    row: &serde_json::Value,
+) -> Result<()> {
+    use rusqlite::types::Value as Sql;
+    let refuse = || Error::Validation(Vec::new());
+    if !MASTER_TABLES.contains(&table) {
+        return Err(refuse());
+    }
+    let object = row.as_object().ok_or_else(refuse)?;
+    let id = object
+        .get("id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .ok_or_else(refuse)?;
+    let info: Vec<(String, String)> = {
+        let mut stmt = tx.prepare(&format!("PRAGMA main.table_info({table})"))?;
+        stmt.query_map([], |r| Ok((r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    let now = crate::dates::timestamp(clock);
+    let mut names = Vec::new();
+    let mut values = Vec::new();
+    for (name, kind) in &info {
+        let value = if name == "updated_at" {
+            Sql::Text(now.clone())
+        } else {
+            match object.get(name).unwrap_or(&serde_json::Value::Null) {
+                serde_json::Value::Null => Sql::Null,
+                serde_json::Value::Bool(b) => Sql::Integer(i64::from(*b)),
+                serde_json::Value::Number(n) => match n.as_i64() {
+                    Some(i) => Sql::Integer(i),
+                    None => Sql::Real(n.as_f64().unwrap_or_default()),
+                },
+                serde_json::Value::String(s) if kind.eq_ignore_ascii_case("BLOB") => {
+                    use base64::Engine;
+                    Sql::Blob(
+                        base64::engine::general_purpose::STANDARD
+                            .decode(s)
+                            .map_err(|_| refuse())?,
+                    )
+                }
+                serde_json::Value::String(s) => Sql::Text(s.clone()),
+                _ => return Err(refuse()),
+            }
+        };
+        names.push(name.clone());
+        values.push(value);
+    }
+    let exists = updated_at(tx, "main", table, id)?.is_some();
+    if exists {
+        let set = names
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.as_str() != "id")
+            .map(|(i, n)| format!("{n} = ?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let id_index = names.iter().position(|n| n == "id").ok_or_else(refuse)? + 1;
+        tx.execute(
+            &format!("UPDATE main.{table} SET {set} WHERE id = ?{id_index}"),
+            rusqlite::params_from_iter(values),
+        )?;
+    } else {
+        let marks = (1..=names.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        tx.execute(
+            &format!(
+                "INSERT INTO main.{table} ({}) VALUES ({marks})",
+                names.join(", ")
+            ),
+            rusqlite::params_from_iter(values),
+        )?;
+        tx.execute(
+            "DELETE FROM main.tombstones WHERE table_name = ?1 AND id = ?2",
+            params![table, id.to_string()],
+        )?;
+    }
+    audit::log(
+        tx,
+        clock,
+        table,
+        id,
+        "keep_other_version",
+        serde_json::json!({ "table": table }),
+    )
+}
+
+/// What the quarantine holds for `ids`: kind, reason and, for invoices,
+/// number and business.
+pub fn quarantine_entries(conn: &Connection, ids: &[String]) -> Result<Vec<QuarantineEntry>> {
+    let mut out = Vec::new();
+    for id in ids {
+        let row: Option<(String, String, String)> = conn
+            .query_row(
+                "SELECT kind, reason, payload FROM merge_quarantine WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        let Some((kind, reason, payload)) = row else {
+            continue;
+        };
+        let payload: serde_json::Value = serde_json::from_str(&payload).unwrap_or_default();
+        let invoice = &payload["invoice"][0];
+        out.push(QuarantineEntry {
+            id: id.clone(),
+            kind,
+            reason,
+            number: invoice["number"].as_str().map(str::to_string),
+            business_id: invoice["business_id"]
+                .as_str()
+                .and_then(|s| Uuid::parse_str(s).ok()),
+        });
+    }
+    Ok(out)
 }
 
 /// Last-writer-wins for one master data table.
@@ -619,6 +798,13 @@ fn append_only(
          WHERE id NOT IN (SELECT id FROM main.merge_quarantine)",
         [],
     )?;
+    report.added += tx.execute(
+        "INSERT INTO main.invoice_attachments (id, invoice_id, kind, file_name, bytes, created_at)
+         SELECT id, invoice_id, kind, file_name, bytes, created_at FROM other.invoice_attachments
+         WHERE id NOT IN (SELECT id FROM main.invoice_attachments)
+           AND invoice_id IN (SELECT id FROM main.invoices)",
+        [],
+    )?;
     tx.execute(
         "INSERT INTO main.audit_log (at, entity, entity_id, action, data, uid)
          SELECT at, entity, entity_id, action, data, uid FROM other.audit_log
@@ -657,7 +843,13 @@ fn apply_tombstones(
     for (table, id, at) in marks {
         let known = matches!(
             table.as_str(),
-            "businesses" | "brands" | "customers" | "products" | "invoices" | "payments"
+            "businesses"
+                | "brands"
+                | "customers"
+                | "products"
+                | "outside_revenue"
+                | "invoices"
+                | "payments"
         );
         if known && let Some(local_at) = updated_at(tx, "main", &table, id)? {
             let unchanged = if has_base {
@@ -943,6 +1135,52 @@ mod document_tests {
                 .query_row("SELECT reason FROM merge_quarantine", [], |r| r.get(0))
                 .unwrap();
         assert_eq!(reason, "number_collision");
+    }
+
+    #[test]
+    fn quarantine_entries_name_duplicate_number() {
+        let mut w = world();
+        let (base, b_path) = split(&w);
+        let (brand, customer, business) = (w.brand, w.customer, w.business);
+        issue_on(&mut w.a, &w.clock, brand, customer);
+        {
+            let mut b = Db::open(&b_path).unwrap();
+            issue_on(&mut b, &w.clock, brand, customer);
+        }
+        let report = w.a.merge_from(&w.clock, &b_path, Some(&base)).unwrap();
+        let entries = quarantine_entries(w.a.read(), &report.quarantined).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, report.quarantined[0]);
+        assert_eq!(entries[0].kind, "invoice");
+        assert_eq!(entries[0].reason, "number_collision");
+        assert_eq!(entries[0].number.as_deref(), Some("RE-2026-0001"));
+        assert_eq!(entries[0].business_id, Some(business));
+        assert!(quarantine_entries(w.a.read(), &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn attachments_merge_append_only() {
+        let mut w = world();
+        let (brand, customer) = (w.brand, w.customer);
+        let invoice = issue_on(&mut w.a, &w.clock, brand, customer);
+        let (base, b_path) = split(&w);
+        {
+            let b = Db::open(&b_path).unwrap();
+            b.read()
+                .execute(
+                    "INSERT INTO invoice_attachments (id, invoice_id, kind, file_name, bytes, created_at)
+                     VALUES (?1, ?2, 'original_pdf', 'alt.pdf', X'255044462D', 'x')",
+                    [Uuid::new_v4().to_string(), invoice.to_string()],
+                )
+                .unwrap();
+        }
+        w.a.merge_from(&w.clock, &b_path, Some(&base)).unwrap();
+        w.a.merge_from(&w.clock, &b_path, Some(&base)).unwrap();
+        let count: i64 =
+            w.a.read()
+                .query_row("SELECT COUNT(*) FROM invoice_attachments", [], |r| r.get(0))
+                .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]
@@ -1615,6 +1853,57 @@ mod master_tests {
     }
 
     #[test]
+    fn changed_both_carries_label_and_losing_row() {
+        let mut p = pair();
+        let (customer, clock) = (p.customer, &p.clock);
+        set_city(&mut p.a, clock, customer, "Lokalstadt");
+        p.clock.advance_secs(60);
+        on_b(&p, |b| set_city(b, &p.clock, p.customer, "Fernstadt"));
+        let report = p.a.merge_from(&p.clock, &p.b_path, Some(&p.base)).unwrap();
+        let both = &report.changed_both[0];
+        assert_eq!(both.label, "Kunde A");
+        let lost = both.other.as_ref().unwrap();
+        assert_eq!(lost["city"], "Lokalstadt");
+        assert_eq!(lost["id"], customer.to_string());
+    }
+
+    #[test]
+    fn keep_other_version_restores_losing_row() {
+        let mut p = pair();
+        let (customer, clock) = (p.customer, &p.clock);
+        set_city(&mut p.a, clock, customer, "Lokalstadt");
+        p.clock.advance_secs(60);
+        on_b(&p, |b| set_city(b, &p.clock, p.customer, "Fernstadt"));
+        let report = p.a.merge_from(&p.clock, &p.b_path, Some(&p.base)).unwrap();
+        let both = report.changed_both[0].clone();
+        p.clock.advance_secs(60);
+        p.a.write(|tx| keep_other_version(tx, &p.clock, &both.table, both.other.as_ref().unwrap()))
+            .unwrap();
+        let c = get_customer(p.a.read(), customer).unwrap();
+        assert_eq!(c.city, "Lokalstadt");
+        assert_eq!(c.name, "Kunde A");
+        let logged: i64 =
+            p.a.read()
+                .query_row(
+                    "SELECT COUNT(*) FROM audit_log WHERE action = 'keep_other_version'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+        assert_eq!(logged, 1);
+    }
+
+    #[test]
+    fn keep_other_version_refuses_documents() {
+        let mut p = pair();
+        let row = serde_json::json!({ "id": Uuid::new_v4().to_string() });
+        let err =
+            p.a.write(|tx| keep_other_version(tx, &p.clock, "invoices", &row))
+                .unwrap_err();
+        assert!(matches!(err, Error::Validation(_)), "{err:?}");
+    }
+
+    #[test]
     fn merge_without_base_reports_unclear() {
         let mut p = pair();
         on_b(&p, |b| set_city(b, &p.clock, p.customer, "Fernstadt"));
@@ -1686,13 +1975,13 @@ mod master_tests {
         let newer = p.b_path.with_file_name("newer.psybil");
         {
             let conn = rusqlite::Connection::open(&newer).unwrap();
-            conn.execute_batch("CREATE TABLE x (a); PRAGMA user_version = 3;")
+            conn.execute_batch("CREATE TABLE x (a); PRAGMA user_version = 99;")
                 .unwrap();
         }
         let _ = p.brand;
         assert!(matches!(
             p.a.merge_from(&p.clock, &newer, None),
-            Err(crate::Error::NewerSchema { found: 3, .. })
+            Err(crate::Error::NewerSchema { found: 99, .. })
         ));
     }
 }
