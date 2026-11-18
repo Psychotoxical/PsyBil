@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-quarantine-entries"
+description = "Enables the quarantine_entries command without any pre-configured scope."
+commands.allow = ["quarantine_entries"]
+
+[[permission]]
+identifier = "deny-quarantine-entries"
+description = "Denies the quarantine_entries command without any pre-configured scope."
+commands.deny = ["quarantine_entries"]

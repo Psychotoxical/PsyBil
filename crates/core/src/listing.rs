@@ -34,11 +34,13 @@ pub struct InvoiceRow {
     pub invoice_date: NaiveDate,
     pub due_date: NaiveDate,
     pub gross: Cents,
+    pub currency: String,
     pub status: InvoiceStatus,
 }
 
 /// The invoices matching `filter`, newest first. Drafts show their current
-/// totals, issued invoices the frozen ones.
+/// totals and customer, issued documents the frozen totals and the customer
+/// name as printed.
 pub fn list_invoices(
     conn: &Connection,
     filter: &InvoiceFilter,
@@ -54,8 +56,14 @@ pub fn list_invoices(
         .collect::<rusqlite::Result<_>>()?;
     let text = filter.text.trim().to_lowercase();
     let mut out = Vec::new();
-    for (id, customer_name) in rows {
+    for (id, current_name) in rows {
         let invoice = crate::invoice::load_invoice(conn, id)?;
+        let customer_name = match invoice.state {
+            InvoiceState::Draft => current_name,
+            InvoiceState::Issued => {
+                crate::overview::printed_customer_name(conn, id)?.or(current_name)
+            }
+        };
         if filter.business_id.is_some_and(|b| b != invoice.business_id)
             || filter
                 .year
@@ -88,6 +96,7 @@ pub fn list_invoices(
             invoice_date: invoice.invoice_date,
             due_date: invoice.due_date,
             gross,
+            currency: invoice.currency,
             status,
         });
     }
@@ -161,6 +170,39 @@ mod tests {
     fn issue(w: &mut World, id: Uuid) {
         w.db.write(|tx| issue_invoice(tx, &clock(), id, IssueOptions::default()))
             .unwrap();
+    }
+
+    #[test]
+    fn list_shows_printed_customer_name_and_currency() {
+        let mut w = world();
+        let (brand, kunde, club) = (w.a.1, w.kunde, w.club);
+        let issued = draft_on(&mut w, brand, kunde, d(2026, 11, 1));
+        issue(&mut w, issued);
+        let draft = draft_on(&mut w, brand, kunde, d(2026, 11, 2));
+        let mut customer = crate::masterdata::get_customer(w.db.read(), w.kunde).unwrap();
+        customer.name = "Neuer Name".into();
+        w.db.write(|tx| crate::masterdata::update_customer(tx, &clock(), &customer))
+            .unwrap();
+        let (_, usd_brand) =
+            w.db.write(|tx| {
+                create_business(
+                    tx,
+                    &clock(),
+                    NewBusiness {
+                        name: "Dollar Studio".into(),
+                        currency: "USD".into(),
+                        ..sample_business()
+                    },
+                )
+            })
+            .unwrap();
+        let usd = draft_on(&mut w, usd_brand, club, d(2026, 11, 3));
+        let rows = list_invoices(w.db.read(), &InvoiceFilter::default(), d(2026, 11, 18)).unwrap();
+        let row = |id: Uuid| rows.iter().find(|r| r.id == id).unwrap();
+        assert_eq!(row(issued).customer_name.as_deref(), Some("Kunde A"));
+        assert_eq!(row(draft).customer_name.as_deref(), Some("Neuer Name"));
+        assert_eq!(row(issued).currency, "EUR");
+        assert_eq!(row(usd).currency, "USD");
     }
 
     fn ids(w: &World, filter: InvoiceFilter) -> Vec<Uuid> {

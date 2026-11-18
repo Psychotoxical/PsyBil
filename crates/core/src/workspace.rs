@@ -36,6 +36,8 @@ pub enum Access {
     /// Another computer holds the lock; this is a copy for reading.
     ReadOnly {
         holder: LockInfo,
+        /// The holder has not renewed the lock for 5 minutes or more.
+        stale: bool,
     },
 }
 
@@ -80,8 +82,19 @@ fn file_hash(path: &Path) -> Result<Option<String>> {
     }
 }
 
-fn remove_db_files(path: &Path) -> Result<()> {
-    for suffix in ["", "-wal", "-shm"] {
+pub(crate) fn remove_db_files(path: &Path) -> Result<()> {
+    std::fs::remove_file(path)
+        .or_else(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => Ok(()),
+            _ => Err(e),
+        })
+        .map_err(io_error)?;
+    remove_side_files(path)
+}
+
+/// Removes the `-wal` and `-shm` files of a closed database.
+pub(crate) fn remove_side_files(path: &Path) -> Result<()> {
+    for suffix in ["-wal", "-shm"] {
         let file = PathBuf::from(format!("{}{suffix}", path.display()));
         match std::fs::remove_file(&file) {
             Ok(()) => {}
@@ -92,14 +105,21 @@ fn remove_db_files(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Makes the next opens after a restore fail, for tests.
+    pub(crate) static FAIL_REOPEN: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 /// Marks in the cache that the working copy holds changes the shared file
 /// does not have yet. It survives a crash, so the next start keeps them.
 const DIRTY_MARK: &str = "work.dirty";
-const WORK_DB: &str = "work.db";
+/// The working copy of a shared folder in this computer's cache.
+pub const WORK_DB: &str = "work.db";
 const BASE_DB: &str = "base.db";
 
 /// Forces a written file onto the disk before it is renamed into place.
-fn flush_file(path: &Path) -> Result<()> {
+pub(crate) fn flush_file(path: &Path) -> Result<()> {
     std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -119,6 +139,30 @@ fn check_schema(dir: &Path) -> Result<()> {
         Ok(_) | Err(Error::OlderSchema { .. }) => Ok(()),
         Err(e) => Err(e),
     }
+}
+
+/// Refuses a shared folder whose data file is missing while this computer
+/// has worked with it before (its cache has a base): the folder is most
+/// likely not mounted or not synced yet, and starting empty there would hide
+/// the real data.
+fn check_present(dir: &Path, cache: &Path) -> Result<()> {
+    if !dir.join(SHARED_DB).exists() && cache.join(BASE_DB).exists() {
+        return Err(Error::SharedFileMissing);
+    }
+    Ok(())
+}
+
+/// Opens the data again after a restore. Tests can make it fail.
+fn reopen(path: &Path) -> Result<Db> {
+    #[cfg(test)]
+    if FAIL_REOPEN.with(|f| {
+        let left = f.get();
+        f.set(left.saturating_sub(1));
+        left > 0
+    }) {
+        return Err(Error::Io("reopen failed (test)".into()));
+    }
+    Db::open(path)
 }
 
 /// Copies the shared file (if any) into the cache as `name`, and with
@@ -174,7 +218,10 @@ impl Workspace {
                             db,
                             location,
                             device,
-                            access: Access::ReadOnly { holder },
+                            access: Access::ReadOnly {
+                                holder,
+                                stale: false,
+                            },
                             base_hash: None,
                             dirty: false,
                         })
@@ -182,6 +229,7 @@ impl Workspace {
                     LockState::Stale(info) => Err(Error::LockStale(info)),
                     LockState::Free | LockState::Mine(_) => {
                         check_schema(dir)?;
+                        check_present(dir, cache)?;
                         lockfile::acquire(dir, &device, user, clock.now_utc())?;
                         Self::writable(location.clone(), device)
                     }
@@ -201,6 +249,9 @@ impl Workspace {
             return Self::open(location, device, user, clock);
         };
         check_schema(dir)?;
+        if let Location::Shared { cache, .. } = &location {
+            check_present(dir, cache)?;
+        }
         lockfile::take_over(dir, &device, user, clock.now_utc())?;
         let mut ws = Self::writable(location.clone(), device)?;
         let name = ws.device.name.clone();
@@ -215,6 +266,89 @@ impl Workspace {
             )
         })?;
         Ok(ws)
+    }
+
+    /// Like `open`, but an abandoned lock opens the data read-only (marked
+    /// `stale`) instead of failing, so the window can show it and offer to
+    /// take over.
+    pub fn open_or_read(
+        location: Location,
+        device: Device,
+        user: &str,
+        clock: &dyn Clock,
+    ) -> Result<Workspace> {
+        match Self::open(location.clone(), device.clone(), user, clock) {
+            Err(Error::LockStale(holder)) => {
+                let Location::Shared { dir, cache } = &location else {
+                    return Err(Error::LockStale(holder));
+                };
+                let (db, _) = load_copy(dir, cache, "readonly.db", false)?;
+                Ok(Workspace {
+                    db,
+                    location,
+                    device,
+                    access: Access::ReadOnly {
+                        holder,
+                        stale: true,
+                    },
+                    base_hash: None,
+                    dirty: false,
+                })
+            }
+            other => other,
+        }
+    }
+
+    /// Takes the lock even from a computer that still renews it, and logs
+    /// who held it. That computer can no longer write back; what it has not
+    /// written back yet waits in its cache until it takes over again.
+    pub fn force_take_over(
+        location: Location,
+        device: Device,
+        user: &str,
+        clock: &dyn Clock,
+    ) -> Result<Workspace> {
+        let Location::Shared { dir, .. } = &location else {
+            return Self::open(location, device, user, clock);
+        };
+        check_schema(dir)?;
+        if let Location::Shared { cache, .. } = &location {
+            check_present(dir, cache)?;
+        }
+        let previous = match lockfile::read_lock(dir, &device, clock.now_utc())? {
+            LockState::Held(info) | LockState::Stale(info) => Some(info),
+            LockState::Mine(_) | LockState::Free => None,
+        };
+        lockfile::force_take_over(dir, &device, user, clock.now_utc())?;
+        let mut ws = Self::writable(location.clone(), device)?;
+        let name = ws.device.name.clone();
+        ws.write(|tx| {
+            crate::audit::log(
+                tx,
+                clock,
+                "database",
+                Uuid::nil(),
+                "force_take_over_lock",
+                serde_json::json!({
+                    "device": name,
+                    "previous_device": previous.as_ref().map(|p| p.device_name.clone()),
+                    "previous_since": previous.as_ref().map(|p| p.started),
+                }),
+            )
+        })?;
+        Ok(ws)
+    }
+
+    /// The lock as it stands now; `None` for data on this computer only.
+    pub fn lock_state(&self, clock: &dyn Clock) -> Result<Option<LockState>> {
+        match &self.location {
+            Location::Local { .. } => Ok(None),
+            Location::Shared { dir, .. } => Ok(Some(lockfile::read_lock(
+                dir,
+                &self.device,
+                clock.now_utc(),
+            )?)),
+        }
     }
 
     /// Opens the working copy. Changes a crash or a failed sync left in the
@@ -256,6 +390,17 @@ impl Workspace {
         &self.db
     }
 
+    /// False after a restore could not open the data again; nothing is
+    /// written then.
+    pub fn is_open(&self) -> bool {
+        self.db.path().is_some()
+    }
+
+    /// The working copy holds changes the shared folder does not have yet.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
     pub fn access(&self) -> &Access {
         &self.access
     }
@@ -266,6 +411,9 @@ impl Workspace {
 
     /// Runs a write; refused while the data is open read-only.
     pub fn write<T>(&mut self, f: impl FnOnce(&Transaction) -> Result<T>) -> Result<T> {
+        if !self.is_open() {
+            return Err(Error::DataNotOpen);
+        }
         if matches!(self.access, Access::ReadOnly { .. }) {
             return Err(Error::ReadOnly);
         }
@@ -277,6 +425,10 @@ impl Workspace {
     pub fn heartbeat(&self, clock: &dyn Clock) -> Result<()> {
         match (&self.location, &self.access) {
             (Location::Shared { dir, .. }, Access::ReadWrite) => {
+                // A folder that lost its file is gone, not taken over.
+                if self.base_hash.is_some() && !dir.join(SHARED_DB).exists() {
+                    return Err(Error::SharedFileMissing);
+                }
                 lockfile::heartbeat(dir, &self.device, clock.now_utc())
             }
             _ => Ok(()),
@@ -290,6 +442,12 @@ impl Workspace {
             (Location::Shared { dir, cache }, Access::ReadWrite) => (dir.clone(), cache.clone()),
             _ => return Ok(SyncOutcome::Unchanged),
         };
+        if !self.is_open() {
+            return Err(Error::DataNotOpen);
+        }
+        if self.base_hash.is_some() && !dir.join(SHARED_DB).exists() {
+            return Err(Error::SharedFileMissing);
+        }
         if !matches!(
             lockfile::read_lock(&dir, &self.device, clock.now_utc())?,
             LockState::Mine(_)
@@ -325,13 +483,82 @@ impl Workspace {
     /// Writes a complete copy to `file`: a temporary file next to it, forced
     /// onto the disk, then renamed into place.
     fn place_copy(&self, file: &Path) -> Result<()> {
-        let tmp = PathBuf::from(format!("{}.tmp-{}", file.display(), self.device.id));
-        remove_db_files(&tmp)?;
-        self.db
-            .read()
-            .execute("VACUUM INTO ?1", [tmp.to_string_lossy().to_string()])?;
-        flush_file(&tmp)?;
-        std::fs::rename(&tmp, file).map_err(io_error)
+        self.db.place_copy(file, &self.device.id.to_string())
+    }
+
+    /// Replaces the data with the backup in `backup`, after saving the
+    /// current state into `backups_dir`. Returns that saved file. Nothing is
+    /// changed when the backup is damaged, foreign or newer.
+    pub fn restore(
+        &mut self,
+        backup: &Path,
+        backups_dir: &Path,
+        clock: &dyn Clock,
+    ) -> Result<PathBuf> {
+        if matches!(self.access, Access::ReadOnly { .. }) {
+            return Err(Error::ReadOnly);
+        }
+        if let Location::Shared { dir, .. } = &self.location
+            && !matches!(
+                lockfile::read_lock(dir, &self.device, clock.now_utc())?,
+                LockState::Mine(_)
+            )
+        {
+            return Err(Error::LockLost);
+        }
+        let info = crate::backup::inspect_backup(backup)?;
+        let now = clock.now_utc().with_timezone(&chrono::Local).naive_local();
+        std::fs::create_dir_all(backups_dir).map_err(io_error)?;
+        let saved = backups_dir.join(crate::backup::backup_file_name(
+            crate::backup::BEFORE_RESTORE_PREFIX,
+            now,
+        ));
+        crate::backup::backup_to(&self.db, &saved)?;
+        let target = match &self.location {
+            Location::Local { file } => file.clone(),
+            Location::Shared { cache, .. } => cache.join(WORK_DB),
+        };
+        // The checked backup, brought to the current schema, waits next to
+        // the data until the old file is closed.
+        let staged = PathBuf::from(format!("{}.restore-{}", target.display(), Uuid::new_v4()));
+        remove_db_files(&staged)?;
+        std::fs::copy(backup, &staged).map_err(io_error)?;
+        if let Err(e) = Db::open(&staged).map(drop) {
+            let _ = remove_db_files(&staged);
+            return Err(e);
+        }
+        remove_side_files(&staged)?;
+        drop(std::mem::replace(&mut self.db, Db::open_in_memory()?));
+        let swapped = remove_side_files(&target)
+            .and_then(|()| std::fs::rename(&staged, &target).map_err(io_error));
+        // A file can be busy for a moment on Windows (a virus scan): try once
+        // more. If it still fails, the workspace stays closed (`is_open` is
+        // false) and writes nothing, instead of working on an empty stand-in.
+        self.db = reopen(&target).or_else(|_| reopen(&target))?;
+        if let Err(e) = swapped {
+            let _ = remove_db_files(&staged);
+            return Err(e);
+        }
+        let file = backup
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.write(|tx| {
+            crate::audit::log(
+                tx,
+                clock,
+                "database",
+                Uuid::nil(),
+                "restore_backup",
+                serde_json::json!({ "file": file, "data_as_of": info.data_as_of }),
+            )
+        })?;
+        // A restore is a deliberate choice: the shared file gets the
+        // restored state without merging.
+        if let Location::Shared { dir, cache } = self.location.clone() {
+            self.write_back(&dir, &cache)?;
+        }
+        Ok(saved)
     }
 
     fn write_back(&mut self, dir: &Path, cache: &Path) -> Result<()> {
@@ -404,7 +631,11 @@ impl Workspace {
             }
         };
         let mut old = std::mem::replace(self, opened);
-        old.close(clock)
+        // The data is already in the new place. When the old shared folder
+        // cannot be written back or unlocked, its cache keeps the changes and
+        // its lock runs stale; the move itself has succeeded.
+        let _ = old.close(clock);
+        Ok(())
     }
 
     /// Writes back and releases the lock. On an error the workspace stays
@@ -476,7 +707,7 @@ mod conflict_tests {
             dir: dir.clone(),
             cache: root.path().join("cache"),
         };
-        let mut ws = Workspace::open(location, device, "frank", &clock).unwrap();
+        let mut ws = Workspace::open(location, device, "nutzer", &clock).unwrap();
         ws.write(|tx| create_customer(tx, &clock, sample_customer()))
             .unwrap();
         ws.sync(&clock).unwrap();
@@ -516,7 +747,7 @@ mod conflict_tests {
         let local = Location::Local {
             file: root.path().join("local.psybil"),
         };
-        let mut ws = Workspace::open(local, device, "frank", &clock).unwrap();
+        let mut ws = Workspace::open(local, device, "nutzer", &clock).unwrap();
         ws.write(|tx| create_customer(tx, &clock, sample_customer()))
             .unwrap();
         let dir = root.path().join("Nextcloud");
@@ -524,7 +755,7 @@ mod conflict_tests {
             dir: dir.clone(),
             cache: root.path().join("cache"),
         };
-        ws.relocate(target.clone(), "frank", &clock).unwrap();
+        ws.relocate(target.clone(), "nutzer", &clock).unwrap();
         assert_eq!(ws.location(), &target);
         assert!(matches!(ws.access(), Access::ReadWrite));
         assert_eq!(names(ws.db()), vec!["Kunde A"]);
@@ -543,7 +774,7 @@ mod conflict_tests {
         let local = Location::Local {
             file: root.path().join("local.psybil"),
         };
-        let mut ws = Workspace::open(local.clone(), device, "frank", &clock).unwrap();
+        let mut ws = Workspace::open(local.clone(), device, "nutzer", &clock).unwrap();
         ws.write(|tx| create_customer(tx, &clock, sample_customer()))
             .unwrap();
         let dir = root.path().join("Nextcloud");
@@ -552,14 +783,14 @@ mod conflict_tests {
             id: Uuid::new_v4(),
             name: "Mac".into(),
         };
-        lockfile::acquire(&dir, &other, "frank", clock.now_utc()).unwrap();
+        lockfile::acquire(&dir, &other, "nutzer", clock.now_utc()).unwrap();
         clock.advance_secs(400);
         let target = Location::Shared {
             dir: dir.clone(),
             cache: root.path().join("cache"),
         };
         assert!(matches!(
-            ws.relocate(target, "frank", &clock),
+            ws.relocate(target, "nutzer", &clock),
             Err(Error::LockStale(_))
         ));
         assert!(!dir.join(SHARED_DB).exists());
@@ -577,7 +808,7 @@ mod conflict_tests {
         let local = Location::Local {
             file: root.path().join("local.psybil"),
         };
-        let mut ws = Workspace::open(local.clone(), device, "frank", &clock).unwrap();
+        let mut ws = Workspace::open(local.clone(), device, "nutzer", &clock).unwrap();
         let dir = root.path().join("Nextcloud");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(SHARED_DB), b"schon da").unwrap();
@@ -586,7 +817,7 @@ mod conflict_tests {
             cache: root.path().join("cache"),
         };
         assert!(matches!(
-            ws.relocate(target, "frank", &clock),
+            ws.relocate(target, "nutzer", &clock),
             Err(Error::TargetNotEmpty)
         ));
         assert_eq!(ws.location(), &local);
@@ -675,7 +906,7 @@ mod tests {
     #[test]
     fn first_open_creates_shared_db_on_sync() {
         let s = shared();
-        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "frank", &s.clock).unwrap();
+        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
         add_customer(&mut a, &s.clock, "Kunde A");
         assert!(matches!(a.sync(&s.clock).unwrap(), SyncOutcome::Written));
         let check = Db::open_read_only(&s.dir.join(SHARED_DB)).unwrap();
@@ -685,7 +916,7 @@ mod tests {
     #[test]
     fn sync_writes_complete_file_atomically() {
         let s = shared();
-        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "frank", &s.clock).unwrap();
+        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
         add_customer(&mut a, &s.clock, "Kunde A");
         a.sync(&s.clock).unwrap();
         assert_eq!(shared_files(&s), vec!["psybil.db", "psybil.lock"]);
@@ -695,7 +926,7 @@ mod tests {
     #[test]
     fn interrupted_write_leaves_old_file() {
         let s = shared();
-        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "frank", &s.clock).unwrap();
+        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
         add_customer(&mut a, &s.clock, "Kunde A");
         a.sync(&s.clock).unwrap();
         let before = std::fs::read(s.dir.join(SHARED_DB)).unwrap();
@@ -714,12 +945,12 @@ mod tests {
     #[test]
     fn second_device_opens_read_only_while_held() {
         let s = shared();
-        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "frank", &s.clock).unwrap();
+        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
         add_customer(&mut a, &s.clock, "Kunde A");
         a.sync(&s.clock).unwrap();
-        let b = Workspace::open(loc(&s, &s.cache_b), s.mac.clone(), "frank", &s.clock).unwrap();
+        let b = Workspace::open(loc(&s, &s.cache_b), s.mac.clone(), "nutzer", &s.clock).unwrap();
         match b.access() {
-            Access::ReadOnly { holder } => assert_eq!(holder.device_name, "PC"),
+            Access::ReadOnly { holder, .. } => assert_eq!(holder.device_name, "PC"),
             other => panic!("expected read-only, got {other:?}"),
         }
         assert_eq!(names(b.db()), vec!["Kunde A"]);
@@ -728,8 +959,9 @@ mod tests {
     #[test]
     fn read_only_refuses_writes() {
         let s = shared();
-        let _a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "frank", &s.clock).unwrap();
-        let mut b = Workspace::open(loc(&s, &s.cache_b), s.mac.clone(), "frank", &s.clock).unwrap();
+        let _a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
+        let mut b =
+            Workspace::open(loc(&s, &s.cache_b), s.mac.clone(), "nutzer", &s.clock).unwrap();
         let result = b.write(|tx| create_customer(tx, &s.clock, sample_customer()));
         assert!(matches!(result, Err(Error::ReadOnly)));
     }
@@ -737,19 +969,185 @@ mod tests {
     #[test]
     fn stale_lock_needs_take_over() {
         let s = shared();
-        let _a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "frank", &s.clock).unwrap();
+        let _a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
         s.clock.advance_secs(400);
-        let result = Workspace::open(loc(&s, &s.cache_b), s.mac.clone(), "frank", &s.clock);
+        let result = Workspace::open(loc(&s, &s.cache_b), s.mac.clone(), "nutzer", &s.clock);
         assert!(matches!(result, Err(Error::LockStale(_))));
         let b =
-            Workspace::take_over(loc(&s, &s.cache_b), s.mac.clone(), "frank", &s.clock).unwrap();
+            Workspace::take_over(loc(&s, &s.cache_b), s.mac.clone(), "nutzer", &s.clock).unwrap();
         assert!(matches!(b.access(), Access::ReadWrite));
+    }
+
+    #[test]
+    fn missing_shared_file_with_cache_is_refused() {
+        let s = shared();
+        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
+        add_customer(&mut a, &s.clock, "Kunde A");
+        a.close(&s.clock).unwrap();
+        // The folder is there, but its file is not (cloud not synced yet).
+        std::fs::remove_file(s.dir.join(SHARED_DB)).unwrap();
+        assert!(matches!(
+            Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock),
+            Err(Error::SharedFileMissing)
+        ));
+        assert!(s.cache_a.join(WORK_DB).exists(), "the working copy is kept");
+        assert!(!s.dir.join(SHARED_DB).exists(), "no empty file written");
+        assert!(!s.dir.join(lockfile::LOCK_FILE).exists(), "no lock taken");
+    }
+
+    #[test]
+    fn folder_gone_while_running_is_not_lock_lost() {
+        let s = shared();
+        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
+        add_customer(&mut a, &s.clock, "Kunde A");
+        a.sync(&s.clock).unwrap();
+        std::fs::remove_file(s.dir.join(SHARED_DB)).unwrap();
+        std::fs::remove_file(s.dir.join(lockfile::LOCK_FILE)).unwrap();
+        assert!(matches!(
+            a.heartbeat(&s.clock),
+            Err(Error::SharedFileMissing)
+        ));
+        add_customer(&mut a, &s.clock, "Kunde B");
+        assert!(matches!(a.sync(&s.clock), Err(Error::SharedFileMissing)));
+        assert!(!s.dir.join(SHARED_DB).exists());
+        assert_eq!(names(a.db()), ["Kunde A", "Kunde B"]);
+    }
+
+    #[test]
+    fn failed_reopen_after_restore_writes_nothing() {
+        let s = shared();
+        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
+        add_customer(&mut a, &s.clock, "Kunde A");
+        a.sync(&s.clock).unwrap();
+        let backup = s.cache_b.with_file_name("old.db");
+        crate::backup::backup_to(a.db(), &backup).unwrap();
+        let before = std::fs::read(s.dir.join(SHARED_DB)).unwrap();
+        FAIL_REOPEN.with(|f| f.set(2));
+        let backups = s.cache_b.with_file_name("backups");
+        assert!(a.restore(&backup, &backups, &s.clock).is_err());
+        assert!(!a.is_open());
+        assert!(matches!(
+            a.write(|tx| crate::masterdata::create_customer(tx, &s.clock, sample_customer())),
+            Err(Error::DataNotOpen)
+        ));
+        assert!(matches!(a.sync(&s.clock), Err(Error::DataNotOpen)));
+        assert_eq!(std::fs::read(s.dir.join(SHARED_DB)).unwrap(), before);
+    }
+
+    #[test]
+    fn reopen_after_restore_is_retried_once() {
+        let s = shared();
+        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
+        add_customer(&mut a, &s.clock, "Kunde A");
+        a.sync(&s.clock).unwrap();
+        let backup = s.cache_b.with_file_name("old.db");
+        crate::backup::backup_to(a.db(), &backup).unwrap();
+        FAIL_REOPEN.with(|f| f.set(1));
+        a.restore(&backup, &s.cache_b.with_file_name("backups"), &s.clock)
+            .unwrap();
+        assert!(a.is_open());
+        assert_eq!(names(a.db()), ["Kunde A"]);
+    }
+
+    #[test]
+    fn relocate_survives_failing_close_of_old_place() {
+        let s = shared();
+        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
+        add_customer(&mut a, &s.clock, "Kunde A");
+        // Another computer forces the lock, so closing the old place fails.
+        lockfile::force_take_over(&s.dir, &s.mac, "band", s.clock.now_utc()).unwrap();
+        let file = s.cache_b.with_file_name("local.db");
+        a.relocate(Location::Local { file: file.clone() }, "nutzer", &s.clock)
+            .unwrap();
+        assert_eq!(a.location(), &Location::Local { file });
+        assert_eq!(names(a.db()), ["Kunde A"]);
+    }
+
+    #[test]
+    fn stale_lock_opens_read_only_with_stale_flag() {
+        let s = shared();
+        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
+        add_customer(&mut a, &s.clock, "Kunde A");
+        a.sync(&s.clock).unwrap();
+        s.clock.advance_secs(400);
+        let b = Workspace::open_or_read(loc(&s, &s.cache_b), s.mac.clone(), "nutzer", &s.clock)
+            .unwrap();
+        match b.access() {
+            Access::ReadOnly { holder, stale } => {
+                assert!(*stale);
+                assert_eq!(holder.device_name, "PC");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(names(b.db()), ["Kunde A"]);
+        // A fresh foreign lock is not stale.
+        s.clock.advance_secs(-400);
+        let cache_c = s.cache_a.with_file_name("cache-c");
+        let c =
+            Workspace::open_or_read(loc(&s, &cache_c), s.mac.clone(), "nutzer", &s.clock).unwrap();
+        assert!(matches!(c.access(), Access::ReadOnly { stale: false, .. }));
+    }
+
+    #[test]
+    fn force_take_over_of_fresh_lock_is_logged() {
+        let s = shared();
+        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
+        add_customer(&mut a, &s.clock, "Kunde A");
+        a.sync(&s.clock).unwrap();
+        assert!(matches!(
+            Workspace::take_over(loc(&s, &s.cache_b), s.mac.clone(), "band", &s.clock),
+            Err(Error::LockHeld(_))
+        ));
+        let b = Workspace::force_take_over(loc(&s, &s.cache_b), s.mac.clone(), "band", &s.clock)
+            .unwrap();
+        assert!(matches!(b.access(), Access::ReadWrite));
+        let data: String = b
+            .db()
+            .read()
+            .query_row(
+                "SELECT data FROM audit_log WHERE action = 'force_take_over_lock'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(data.contains("\"PC\""), "{data}");
+        add_customer(&mut a, &s.clock, "Kunde B");
+        assert!(matches!(a.sync(&s.clock), Err(Error::LockLost)));
+    }
+
+    #[test]
+    fn lock_state_sees_lock_released() {
+        let s = shared();
+        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
+        let b = Workspace::open_or_read(loc(&s, &s.cache_b), s.mac.clone(), "nutzer", &s.clock)
+            .unwrap();
+        assert!(matches!(
+            b.lock_state(&s.clock).unwrap(),
+            Some(LockState::Held(_))
+        ));
+        assert!(matches!(
+            a.lock_state(&s.clock).unwrap(),
+            Some(LockState::Mine(_))
+        ));
+        a.close(&s.clock).unwrap();
+        assert_eq!(b.lock_state(&s.clock).unwrap(), Some(LockState::Free));
+        let local = tempfile::tempdir().unwrap();
+        let l = Workspace::open(
+            Location::Local {
+                file: local.path().join("p.db"),
+            },
+            s.pc.clone(),
+            "nutzer",
+            &s.clock,
+        )
+        .unwrap();
+        assert_eq!(l.lock_state(&s.clock).unwrap(), None);
     }
 
     #[test]
     fn remote_change_is_merged_not_overwritten() {
         let s = shared();
-        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "frank", &s.clock).unwrap();
+        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
         add_customer(&mut a, &s.clock, "Kunde A");
         a.sync(&s.clock).unwrap();
         s.clock.advance_secs(30);
@@ -779,10 +1177,10 @@ mod tests {
     #[test]
     fn lost_lock_stops_sync() {
         let s = shared();
-        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "frank", &s.clock).unwrap();
+        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
         s.clock.advance_secs(400);
         let _b =
-            Workspace::take_over(loc(&s, &s.cache_b), s.mac.clone(), "frank", &s.clock).unwrap();
+            Workspace::take_over(loc(&s, &s.cache_b), s.mac.clone(), "nutzer", &s.clock).unwrap();
         add_customer(&mut a, &s.clock, "Kunde A");
         assert!(matches!(a.sync(&s.clock), Err(Error::LockLost)));
     }
@@ -792,11 +1190,11 @@ mod tests {
         let s = shared();
         {
             let mut a =
-                Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "frank", &s.clock).unwrap();
+                Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
             add_customer(&mut a, &s.clock, "Kunde A");
             // No sync, no close: the program ends here.
         }
-        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "frank", &s.clock).unwrap();
+        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
         assert_eq!(names(a.db()), vec!["Kunde A"]);
         a.sync(&s.clock).unwrap();
         assert_eq!(
@@ -810,22 +1208,23 @@ mod tests {
         let s = shared();
         {
             let mut a =
-                Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "frank", &s.clock).unwrap();
+                Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
             add_customer(&mut a, &s.clock, "Kunde A");
             a.sync(&s.clock).unwrap();
             add_customer(&mut a, &s.clock, "Kunde PC");
         }
         s.clock.advance_secs(400);
         let mut b =
-            Workspace::take_over(loc(&s, &s.cache_b), s.mac.clone(), "frank", &s.clock).unwrap();
+            Workspace::take_over(loc(&s, &s.cache_b), s.mac.clone(), "nutzer", &s.clock).unwrap();
         add_customer(&mut b, &s.clock, "Kunde Mac");
         b.sync(&s.clock).unwrap();
         {
-            let ro = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "frank", &s.clock).unwrap();
+            let ro =
+                Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
             assert!(matches!(ro.access(), Access::ReadOnly { .. }));
         }
         b.close(&s.clock).unwrap();
-        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "frank", &s.clock).unwrap();
+        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
         assert!(matches!(a.sync(&s.clock).unwrap(), SyncOutcome::Merged(_)));
         assert_eq!(names(a.db()), vec!["Kunde A", "Kunde Mac", "Kunde PC"]);
     }
@@ -838,7 +1237,7 @@ mod tests {
             conn.execute_batch("CREATE TABLE x (a); PRAGMA user_version = 99;")
                 .unwrap();
         }
-        let result = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "frank", &s.clock);
+        let result = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock);
         assert!(matches!(result, Err(Error::NewerSchema { .. })));
         assert!(!s.dir.join(lockfile::LOCK_FILE).exists());
     }
@@ -846,11 +1245,11 @@ mod tests {
     #[test]
     fn close_writes_and_releases() {
         let s = shared();
-        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "frank", &s.clock).unwrap();
+        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
         add_customer(&mut a, &s.clock, "Kunde A");
         a.close(&s.clock).unwrap();
         assert_eq!(shared_files(&s), vec!["psybil.db"]);
-        let b = Workspace::open(loc(&s, &s.cache_b), s.mac.clone(), "frank", &s.clock).unwrap();
+        let b = Workspace::open(loc(&s, &s.cache_b), s.mac.clone(), "nutzer", &s.clock).unwrap();
         assert!(matches!(b.access(), Access::ReadWrite));
         assert_eq!(names(b.db()), vec!["Kunde A"]);
     }

@@ -61,6 +61,30 @@ export function messageFor(error: CmdError, t: T, subject?: Subject): string {
       return t("The PDF could not be created: {detail}", { detail: error.message });
     case "io":
       return t("The file could not be read or written: {detail}", { detail: error.message });
+    case "read_only":
+      return t("Read only: another computer is editing the data right now.");
+    case "lock_held":
+      return t("Another computer is editing the data right now.");
+    case "lock_lost":
+      return t(
+        "Another computer took over. Your changes stay on this computer and are merged later.",
+      );
+    case "no_data":
+      return t("The data is not open.");
+    case "backup_damaged":
+      return t("The backup is damaged and cannot be restored.");
+    case "not_a_backup":
+      return t("This file is not a PsyBil backup.");
+    case "newer_schema":
+      return t("The data comes from a newer PsyBil. Please update PsyBil.");
+    case "shared_file_missing":
+      return t(
+        "The PsyBil file is missing in the shared folder. Maybe the cloud has not finished syncing.",
+      );
+    case "target_not_empty":
+      return t("There is PsyBil data in that folder already.");
+    case "demo":
+      return t("This is not possible in demo mode.");
     case "busy":
       return t("The data is busy. Please try again.");
     default:

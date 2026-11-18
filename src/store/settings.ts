@@ -10,6 +10,9 @@ export const DEFAULT_SETTINGS: DeviceSettings = {
   language: "de",
   sidebar_collapsed: false,
   preview_open: true,
+  data: { kind: "local" },
+  // Outside the app nobody can answer the first-start questions.
+  setup_done: true,
 };
 
 type State = {

@@ -5,8 +5,9 @@ pub mod apply;
 pub mod plan;
 pub mod read;
 
-#[cfg(test)]
-pub(crate) mod testdata;
+/// Synthetic old databases, for tests here and in the app.
+#[cfg(any(test, feature = "testdata"))]
+pub mod testdata;
 
 pub use apply::*;
 pub use plan::*;

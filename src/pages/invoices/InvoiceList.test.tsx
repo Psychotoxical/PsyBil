@@ -1,9 +1,11 @@
+import { save } from "@tauri-apps/plugin-dialog";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setLanguage } from "../../i18n";
 import type { InvoiceRow } from "../../ipc/bindings/InvoiceRow";
 import type { StatusKind } from "../../ipc/bindings/StatusKind";
+import { exportInvoicesCsv } from "../../ipc/exports";
 import { listInvoices } from "../../ipc/invoices";
 import { useInvoices } from "../../store/invoices";
 import { useUi } from "../../store/ui";
@@ -11,6 +13,12 @@ import { StatusBadge } from "../../ui/StatusBadge";
 import { InvoiceList } from "./InvoiceList";
 
 vi.mock("../../ipc/invoices", () => ({ listInvoices: vi.fn(async () => ROWS) }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn() }));
+vi.mock("../../ipc/exports", () => ({
+  exportInvoicesCsv: vi.fn(async (_f: unknown, path: string) => path),
+  exportFileName: vi.fn(async () => "Rechnungen-2026-11-18.csv"),
+  revealExported: vi.fn(),
+}));
 vi.mock("../../ipc/masterdata", () => ({
   listBusinesses: vi.fn(async () => [
     { id: "u1", name: "Beispiel GbR", currency: "EUR" },
@@ -29,6 +37,7 @@ function row(o: Partial<InvoiceRow> & { id: string }): InvoiceRow {
     invoice_date: "2026-01-01",
     due_date: "2026-01-15",
     gross: 1000,
+    currency: "EUR",
     status: { kind: "open", open: 1000, overdue: false },
     ...o,
   };
@@ -78,6 +87,32 @@ describe("InvoiceList", () => {
         text: "0002",
       }),
     );
+  });
+
+  it("invoice_csv_uses_current_filter", async () => {
+    const user = userEvent.setup();
+    vi.mocked(save).mockResolvedValueOnce("C:/Temp/liste.csv");
+    render(<InvoiceList />);
+    await screen.findByText("RE-2026-0001");
+    await user.selectOptions(screen.getByLabelText("Status"), "paid");
+    await user.click(screen.getByRole("button", { name: "CSV exportieren …" }));
+    await waitFor(() =>
+      expect(exportInvoicesCsv).toHaveBeenCalledWith(
+        { business_id: null, status: "paid", year: null, text: "" },
+        "C:/Temp/liste.csv",
+      ),
+    );
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultPath: "Rechnungen-2026-11-18.csv" }),
+    );
+  });
+
+  it("amount_uses_the_row_currency", async () => {
+    vi.mocked(listInvoices).mockResolvedValue([
+      row({ id: "x", number: "RE-2026-0009", business_id: "gone", currency: "USD", gross: 5_000 }),
+    ]);
+    render(<InvoiceList />);
+    expect(await screen.findByText("50,00 $")).toBeInTheDocument();
   });
 
   it("status_badge_has_text_and_icon_for_every_kind", () => {

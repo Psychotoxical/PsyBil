@@ -1,6 +1,8 @@
 import {
   Building2,
   FileText,
+  LayoutDashboard,
+  LifeBuoy,
   type LucideIcon,
   Package,
   PanelLeftClose,
@@ -9,13 +11,14 @@ import {
   Settings,
   Users,
 } from "lucide-react";
-import { type CSSProperties, useEffect, useState } from "react";
+import { type CSSProperties, useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import wordmarkUrl from "../assets/wordmark-psybil.svg";
 import type { Business } from "../ipc/bindings/Business";
 import { listBusinesses } from "../ipc/masterdata";
 import { currentSettings, useSettings } from "../store/settings";
 import { type Page, useUi } from "../store/ui";
+import { useReadOnly } from "../store/workspace";
 
 type Item = { page: Page; label: string; icon: LucideIcon };
 
@@ -33,6 +36,8 @@ export function Sidebar() {
   const dataVersion = useUi((s) => s.dataVersion);
   const senderId = useUi((s) => s.senderId);
   const [businesses, setBusinesses] = useState<Business[]>([]);
+  const readOnly = useReadOnly();
+  const reasonId = useId();
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: dataVersion signals saved data
   useEffect(() => {
@@ -48,6 +53,7 @@ export function Sidebar() {
     (businesses.length === 1 ? businesses[0] : undefined);
 
   const work: Item[] = [
+    { page: "overview", label: t("Overview"), icon: LayoutDashboard },
     { page: "invoices", label: t("Invoices"), icon: FileText },
     { page: "customers", label: t("Customers"), icon: Users },
     { page: "catalog", label: t("Catalogue"), icon: Package },
@@ -55,6 +61,7 @@ export function Sidebar() {
   const setup: Item[] = [
     { page: "senders", label: t("Senders"), icon: Building2 },
     { page: "settings", label: t("Settings"), icon: Settings },
+    { page: "help", label: t("Help"), icon: LifeBuoy },
   ];
   const current = route.page === "issued" || route.page === "assistant" ? "invoices" : route.page;
 
@@ -94,13 +101,20 @@ export function Sidebar() {
       <button
         type="button"
         className="btn primary new-invoice"
-        title={collapsed ? t("New invoice") : undefined}
+        title={readOnly ?? (collapsed ? t("New invoice") : undefined)}
         aria-keyshortcuts="Control+N"
+        disabled={readOnly !== null}
+        aria-describedby={readOnly ? reasonId : undefined}
         onClick={() => navigate({ page: "assistant" })}
       >
         <Plus size={18} aria-hidden="true" />
         <span className={collapsed ? "visually-hidden" : undefined}>{t("New invoice")}</span>
       </button>
+      {readOnly && (
+        <span id={reasonId} className="visually-hidden">
+          {readOnly}
+        </span>
+      )}
       <ul className="nav-list">{work.map(item)}</ul>
       <p className={collapsed ? "visually-hidden" : "nav-group"}>{t("Setup")}</p>
       <ul className="nav-list">{setup.map(item)}</ul>

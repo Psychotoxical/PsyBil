@@ -19,6 +19,18 @@ pub enum ThemeChoice {
     Light,
 }
 
+/// Where this computer keeps the data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+pub enum DataPlace {
+    /// The app data folder of this computer.
+    #[default]
+    Local,
+    /// A folder several computers reach, for example in a Nextcloud.
+    Shared { dir: String },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -29,6 +41,9 @@ pub struct DeviceSettings {
     pub language: String,
     pub sidebar_collapsed: bool,
     pub preview_open: bool,
+    pub data: DataPlace,
+    /// The first start's questions have been answered.
+    pub setup_done: bool,
 }
 
 impl Default for DeviceSettings {
@@ -40,6 +55,8 @@ impl Default for DeviceSettings {
             language: "de".into(),
             sidebar_collapsed: false,
             preview_open: true,
+            data: DataPlace::Local,
+            setup_done: false,
         }
     }
 }
@@ -97,5 +114,30 @@ mod tests {
         let loaded = DeviceSettings::load(&broken);
         assert_eq!(loaded.language, "de");
         assert_ne!(loaded.device_id, Uuid::nil());
+    }
+
+    #[test]
+    fn old_settings_file_loads_with_local_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            br#"{"device_id":"6f1c1d2e-0000-4000-8000-000000000001","device_name":"PC",
+                "theme":"dark","language":"en","sidebar_collapsed":false,"preview_open":true}"#,
+        )
+        .unwrap();
+        let loaded = DeviceSettings::load(&path);
+        assert_eq!(loaded.theme, ThemeChoice::Dark);
+        assert_eq!(loaded.data, DataPlace::Local);
+        assert!(!loaded.setup_done);
+        let shared = DeviceSettings {
+            data: DataPlace::Shared {
+                dir: "C:/Daten/Nextcloud/PsyBil".into(),
+            },
+            setup_done: true,
+            ..loaded
+        };
+        shared.save(&path).unwrap();
+        assert_eq!(DeviceSettings::load(&path), shared);
     }
 }

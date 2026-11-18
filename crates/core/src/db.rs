@@ -14,7 +14,7 @@ use crate::calc::PriceMode;
 use crate::{Error, Result};
 
 /// Current schema version.
-pub const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 3;
 
 /// One schema step: SQL, then an optional data step in the same transaction.
 struct Migration {
@@ -30,6 +30,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         sql: include_str!("schema_v2.sql"),
         rust: Some(crate::masterdata::rebase_stock_v2),
+    },
+    Migration {
+        sql: include_str!("schema_v3.sql"),
+        rust: None,
     },
 ];
 
@@ -240,7 +244,7 @@ mod v2_tests {
     }
 
     #[test]
-    fn v1_database_migrates_to_v2() {
+    fn v1_database_migrates_to_current() {
         let dir = tempfile::tempdir().unwrap();
         let path = v1_file(dir.path());
         let db = Db::open(&path).unwrap();
@@ -248,7 +252,7 @@ mod v2_tests {
             .read()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, SCHEMA_VERSION);
         let uid: Option<String> = db
             .read()
             .query_row("SELECT uid FROM audit_log", [], |r| r.get(0))
@@ -257,12 +261,12 @@ mod v2_tests {
         let tables: i64 = db
             .read()
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('tombstones', 'merge_quarantine')",
+                "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('tombstones', 'merge_quarantine', 'outside_revenue', 'invoice_attachments')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(tables, 2);
+        assert_eq!(tables, 4);
     }
 
     #[test]
@@ -271,20 +275,20 @@ mod v2_tests {
         let path = dir.path().join("new.psybil");
         {
             let conn = Connection::open(&path).unwrap();
-            conn.execute_batch("CREATE TABLE x (a); PRAGMA user_version = 3;")
+            conn.execute_batch("CREATE TABLE x (a); PRAGMA user_version = 99;")
                 .unwrap();
         }
         let before = sha256_hex(&std::fs::read(&path).unwrap());
         assert!(matches!(
             Db::open(&path),
             Err(Error::NewerSchema {
-                found: 3,
-                supported: 2
+                found: 99,
+                supported: SCHEMA_VERSION
             })
         ));
         assert!(matches!(
             Db::open_read_only(&path),
-            Err(Error::NewerSchema { found: 3, .. })
+            Err(Error::NewerSchema { found: 99, .. })
         ));
         assert_eq!(sha256_hex(&std::fs::read(&path).unwrap()), before);
     }

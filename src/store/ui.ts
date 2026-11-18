@@ -1,7 +1,15 @@
 import { useEffect } from "react";
 import { create } from "zustand";
 
-export type Page = "invoices" | "customers" | "catalog" | "senders" | "settings";
+export type Page =
+  | "overview"
+  | "invoices"
+  | "customers"
+  | "catalog"
+  | "senders"
+  | "settings"
+  | "import"
+  | "help";
 
 export type Route =
   | { page: Page }
@@ -10,7 +18,10 @@ export type Route =
   /** An issued invoice; `fresh` right after issuing it. */
   | { page: "issued"; id: string; fresh?: boolean };
 
-export type Toast = { id: number; kind: "info" | "error"; text: string };
+/** A button in a message, e.g. "Show in folder". */
+export type ToastAction = { label: string; run: () => void };
+
+export type Toast = { id: number; kind: "info" | "error"; text: string; action?: ToastAction };
 
 type State = {
   route: Route;
@@ -18,6 +29,9 @@ type State = {
   /** Counts saved master data, so that other parts of the window load it again. */
   dataVersion: number;
   bump: () => void;
+  /** The sender the overview shows; `null` for all. */
+  overviewBusiness: string | null;
+  setOverviewBusiness: (id: string | null) => void;
   /** The business of the draft or invoice that is open, for the menu's foot. */
   senderId: string | null;
   setSender: (id: string | null) => void;
@@ -32,7 +46,7 @@ type State = {
   /** Stay on the form. */
   stay: () => void;
   /** Info messages fade after a while; errors stay until closed. */
-  toast: (kind: Toast["kind"], text: string) => void;
+  toast: (kind: Toast["kind"], text: string, action?: ToastAction) => void;
   dismiss: (id: number) => void;
 };
 
@@ -41,10 +55,12 @@ let next = 1;
 const same = (a: Route, b: Route) => JSON.stringify(a) === JSON.stringify(b);
 
 export const useUi = create<State>((set, get) => ({
-  route: { page: "invoices" },
+  route: { page: "overview" },
   toasts: [],
   dataVersion: 0,
   bump: () => set({ dataVersion: get().dataVersion + 1 }),
+  overviewBusiness: null,
+  setOverviewBusiness: (overviewBusiness) => set({ overviewBusiness }),
   senderId: null,
   setSender: (senderId) => set({ senderId }),
   unsaved: false,
@@ -60,12 +76,13 @@ export const useUi = create<State>((set, get) => ({
     set({ unsaved: false, pendingRoute: null, ...(to ? { route: to } : {}) });
   },
   stay: () => set({ pendingRoute: null }),
-  toast: (kind, text) => {
+  toast: (kind, text, action) => {
     // The same message again does not pile up.
     if (get().toasts.some((t) => t.kind === kind && t.text === text)) return;
     const id = next++;
-    set({ toasts: [...get().toasts, { id, kind, text }] });
-    if (kind === "info") setTimeout(() => get().dismiss(id), 6000);
+    set({ toasts: [...get().toasts, { id, kind, text, action }] });
+    // A message with a button stays a little longer, so there is time to use it.
+    if (kind === "info") setTimeout(() => get().dismiss(id), action ? 12000 : 6000);
   },
   dismiss: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
 }));

@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::error::{CmdError, CmdResult};
 use crate::state::AppState;
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn list_businesses(
     state: State<'_, AppState>,
     include_archived: bool,
@@ -18,32 +18,32 @@ pub fn list_businesses(
     state.read(|c| masterdata::list_businesses(c, include_archived))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn create_business(state: State<'_, AppState>, input: NewBusiness) -> CmdResult<(Uuid, Uuid)> {
     state.write(|tx| masterdata::create_business(tx, &SystemClock, input))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn update_business(state: State<'_, AppState>, business: Business) -> CmdResult<()> {
     state.write(|tx| masterdata::update_business(tx, &SystemClock, &business))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn archive_business(state: State<'_, AppState>, id: Uuid, archived: bool) -> CmdResult<()> {
     state.write(|tx| masterdata::archive_business(tx, &SystemClock, id, archived))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn delete_business(state: State<'_, AppState>, id: Uuid) -> CmdResult<()> {
     state.write(|tx| masterdata::delete_business(tx, &SystemClock, id))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn list_brands(state: State<'_, AppState>, business_id: Uuid) -> CmdResult<Vec<Brand>> {
     state.read(|c| masterdata::list_brands(c, business_id))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn create_brand(state: State<'_, AppState>, input: NewBrand) -> CmdResult<Uuid> {
     state.write(|tx| masterdata::create_brand(tx, &SystemClock, input))
 }
@@ -59,7 +59,7 @@ pub fn update_brand_inner(state: &AppState, mut brand: Brand) -> CmdResult<()> {
     })
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn update_brand(state: State<'_, AppState>, brand: Brand) -> CmdResult<()> {
     update_brand_inner(&state, brand)
 }
@@ -88,12 +88,12 @@ pub fn set_brand_logo_inner(state: &AppState, brand_id: Uuid, path: &str) -> Cmd
     })
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn set_brand_logo(state: State<'_, AppState>, brand_id: Uuid, path: String) -> CmdResult<()> {
     set_brand_logo_inner(&state, brand_id, &path)
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn remove_brand_logo(state: State<'_, AppState>, brand_id: Uuid) -> CmdResult<()> {
     state.write(|tx| {
         let mut brand = masterdata::get_brand(tx, brand_id)?;
@@ -104,7 +104,7 @@ pub fn remove_brand_logo(state: State<'_, AppState>, brand_id: Uuid) -> CmdResul
 }
 
 /// The brand's logo as a data URL, for showing it in the window.
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn brand_logo(state: State<'_, AppState>, brand_id: Uuid) -> CmdResult<Option<String>> {
     use base64::Engine;
     let brand = state.read(|c| masterdata::get_brand(c, brand_id))?;
@@ -117,17 +117,17 @@ pub fn brand_logo(state: State<'_, AppState>, brand_id: Uuid) -> CmdResult<Optio
     })
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn archive_brand(state: State<'_, AppState>, id: Uuid, archived: bool) -> CmdResult<()> {
     state.write(|tx| masterdata::archive_brand(tx, &SystemClock, id, archived))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn delete_brand(state: State<'_, AppState>, id: Uuid) -> CmdResult<()> {
     state.write(|tx| masterdata::delete_brand(tx, &SystemClock, id))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn list_customers(
     state: State<'_, AppState>,
     include_archived: bool,
@@ -135,27 +135,27 @@ pub fn list_customers(
     state.read(|c| masterdata::list_customers(c, include_archived))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn create_customer(state: State<'_, AppState>, input: NewCustomer) -> CmdResult<Uuid> {
     state.write(|tx| masterdata::create_customer(tx, &SystemClock, input))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn update_customer(state: State<'_, AppState>, customer: Customer) -> CmdResult<()> {
     state.write(|tx| masterdata::update_customer(tx, &SystemClock, &customer))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn archive_customer(state: State<'_, AppState>, id: Uuid, archived: bool) -> CmdResult<()> {
     state.write(|tx| masterdata::archive_customer(tx, &SystemClock, id, archived))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn delete_customer(state: State<'_, AppState>, id: Uuid) -> CmdResult<()> {
     state.write(|tx| masterdata::delete_customer(tx, &SystemClock, id))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn list_products(
     state: State<'_, AppState>,
     brand_id: Uuid,
@@ -164,17 +164,17 @@ pub fn list_products(
     state.read(|c| masterdata::list_products(c, brand_id, include_inactive))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn create_product(state: State<'_, AppState>, input: NewProduct) -> CmdResult<Uuid> {
     state.write(|tx| masterdata::create_product(tx, &SystemClock, input))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn update_product(state: State<'_, AppState>, product: Product) -> CmdResult<()> {
     state.write(|tx| masterdata::update_product(tx, &SystemClock, &product))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn delete_product(state: State<'_, AppState>, id: Uuid) -> CmdResult<()> {
     state.write(|tx| masterdata::delete_product(tx, &SystemClock, id))
 }

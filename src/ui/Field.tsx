@@ -13,6 +13,12 @@ type Props = {
   children: ReactNode;
 };
 
+/** The ids that describe an input: its hint and its unit, so a screen reader says both. */
+export function describedBy(id: string, hint?: string, unit?: string): string | undefined {
+  const ids = [hint ? `${id}-hint` : "", unit ? `${id}-unit` : ""].filter(Boolean);
+  return ids.length > 0 ? ids.join(" ") : undefined;
+}
+
 /** A label, the input with its unit inside the box, and an optional hint. */
 export function Field({ id, label, hint, unit, invalid, wide, children }: Props) {
   return (
@@ -23,7 +29,7 @@ export function Field({ id, label, hint, unit, invalid, wide, children }: Props)
       <div className={invalid ? "field-box invalid" : "field-box"}>
         {children}
         {unit && (
-          <span className="field-unit" aria-hidden="true">
+          <span className="field-unit" id={`${id}-unit`} aria-hidden="true">
             {unit}
           </span>
         )}

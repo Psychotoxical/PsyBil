@@ -59,6 +59,11 @@ describe("fields", () => {
     expect(screen.getByLabelText("Betrag")).toHaveAttribute("aria-invalid", "true");
   });
 
+  it("field_unit_is_described", () => {
+    render(<AmountField label="Betrag" value="" currency="EUR" onChange={() => {}} />);
+    expect(screen.getByLabelText("Betrag")).toHaveAccessibleDescription("€");
+  });
+
   it("parse_decimal_reads_both_languages", () => {
     expect(parseDecimal("1.234,56", "de")).toBe("1234.56");
     expect(parseDecimal("1,234.56", "en")).toBe("1234.56");

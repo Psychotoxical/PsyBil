@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-year-summary"
+description = "Enables the year_summary command without any pre-configured scope."
+commands.allow = ["year_summary"]
+
+[[permission]]
+identifier = "deny-year-summary"
+description = "Denies the year_summary command without any pre-configured scope."
+commands.deny = ["year_summary"]

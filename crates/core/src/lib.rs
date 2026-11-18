@@ -1,7 +1,10 @@
 //! PsyBil core: all business rules for invoices, taxes, numbering and storage.
 
+pub mod attachments;
 pub mod audit;
+pub mod backup;
 pub mod calc;
+pub mod csv_export;
 pub mod dates;
 pub mod db;
 pub mod demo;
@@ -15,6 +18,7 @@ pub mod masterdata;
 pub mod merge;
 pub mod money;
 pub mod numbering;
+pub mod overview;
 pub mod payments;
 pub mod pdf;
 pub mod settings;
@@ -23,6 +27,7 @@ pub mod tax;
 pub mod tombstone;
 pub mod validate;
 pub mod workspace;
+pub mod year_summary;
 
 #[cfg(test)]
 pub(crate) mod testutil;

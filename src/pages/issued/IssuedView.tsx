@@ -1,6 +1,6 @@
 import "./issued.css";
-import { save } from "@tauri-apps/plugin-dialog";
-import { Ban, Copy, FileDown, List, Pencil, Plus, Trash2, Wallet } from "lucide-react";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { Ban, Copy, FileDown, FileUp, List, Pencil, Plus, Trash2, Wallet } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { formatCents, formatDate } from "../../format";
@@ -9,6 +9,7 @@ import type { InvoiceStatus } from "../../ipc/bindings/InvoiceStatus";
 import type { Payment } from "../../ipc/bindings/Payment";
 import type { PaymentMethod } from "../../ipc/bindings/PaymentMethod";
 import { messageFor, toCmdError } from "../../ipc/errors";
+import { revealExported } from "../../ipc/exports";
 import {
   cancelInvoice,
   correctInvoice,
@@ -16,10 +17,12 @@ import {
   invoiceStatus,
   loadInvoice,
 } from "../../ipc/invoices";
+import { attachOriginalPdf, exportOriginalPdf, originalPdfName } from "../../ipc/legacy";
 import { listCustomers } from "../../ipc/masterdata";
 import { deletePayment, listPayments } from "../../ipc/payments";
 import { exportPdf, pdfFileName } from "../../ipc/pdf";
 import { ConfirmDialog } from "../../shell/ConfirmDialog";
+import { fileNameOf, saveExport } from "../../shell/saveExport";
 import { useUi } from "../../store/ui";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { PdfPages } from "../assistant/Preview";
@@ -48,6 +51,8 @@ export function IssuedView({ id, fresh }: { id: string; fresh?: boolean }) {
   const navigate = useUi((s) => s.navigate);
   const bump = useUi((s) => s.bump);
   const [invoice, setInvoice] = useState<Invoice | null>(null);
+  /** The PDF sent at the time, for invoices taken over from VibeBill. */
+  const [original, setOriginal] = useState<string | null>(null);
   const [status, setStatus] = useState<InvoiceStatus | null>(null);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [customer, setCustomer] = useState<string | null>(null);
@@ -99,6 +104,34 @@ export function IssuedView({ id, fresh }: { id: string; fresh?: boolean }) {
     void reload();
   }, [reload]);
 
+  const imported = invoice?.imported ?? false;
+  useEffect(() => {
+    if (!imported) return;
+    originalPdfName(id)
+      .then(setOriginal)
+      .catch(() => setOriginal(null));
+  }, [id, imported]);
+
+  const attachOriginal = async () => {
+    try {
+      const picked = await open({ filters: [{ name: "PDF", extensions: ["pdf"] }] });
+      if (typeof picked !== "string") return;
+      await attachOriginalPdf(id, picked);
+      setOriginal(fileNameOf(picked));
+      toast("info", t("The PDF sent at the time is attached."));
+    } catch (e) {
+      fail(e);
+    }
+  };
+
+  const saveOriginal = () =>
+    saveExport(t, {
+      name: original ?? "original.pdf",
+      type: "PDF",
+      extension: "pdf",
+      write: (path) => exportOriginalPdf(id, path),
+    });
+
   const customerId = invoice?.customer_id;
   useEffect(() => {
     if (!customerId) return;
@@ -116,7 +149,12 @@ export function IssuedView({ id, fresh }: { id: string; fresh?: boolean }) {
       });
       if (!path) return;
       const written = await exportPdf(id, path);
-      toast("info", t("PDF saved: {path}", { path: written }));
+      toast("info", t("PDF saved: {path}", { path: written }), {
+        label: t("Show in folder"),
+        run: () => {
+          revealExported(written).catch(fail);
+        },
+      });
     } catch (e) {
       fail(e);
     }
@@ -225,6 +263,18 @@ export function IssuedView({ id, fresh }: { id: string; fresh?: boolean }) {
           <FileDown size={16} aria-hidden="true" />
           {t("Save PDF")}
         </button>
+        {imported &&
+          (original ? (
+            <button type="button" className="btn" onClick={() => void saveOriginal()}>
+              <FileDown size={16} aria-hidden="true" />
+              {t("Save original PDF…")}
+            </button>
+          ) : (
+            <button type="button" className="btn" onClick={() => void attachOriginal()}>
+              <FileUp size={16} aria-hidden="true" />
+              {t("Attach the PDF sent at the time…")}
+            </button>
+          ))}
         {!closed && (
           <button type="button" className="btn" onClick={() => setPaying(true)}>
             <Wallet size={16} aria-hidden="true" />
@@ -241,6 +291,19 @@ export function IssuedView({ id, fresh }: { id: string; fresh?: boolean }) {
               <Plus size={16} aria-hidden="true" />
               {t("New invoice")}
             </button>
+            {!closed && (
+              <>
+                <span className="issued-actions-gap" />
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => setPending({ kind: "correct" })}
+                >
+                  <Pencil size={16} aria-hidden="true" />
+                  {t("Correct")}
+                </button>
+              </>
+            )}
           </>
         ) : (
           <>

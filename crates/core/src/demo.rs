@@ -46,6 +46,7 @@ fn product(
     unit: &str,
     price: Decimal,
     stock: Option<Decimal>,
+    tax: TaxChoice,
 ) -> Result<Uuid> {
     create_product(
         tx,
@@ -58,9 +59,7 @@ fn product(
             unit: unit.into(),
             price,
             price_mode: PriceMode::Net,
-            tax: TaxChoice::Fixed(TaxCategory::Standard {
-                rate: Decimal::from(19),
-            }),
+            tax,
             stock,
             active: true,
         },
@@ -74,6 +73,7 @@ fn draft(
     customer: Uuid,
     days_ago: i64,
     line: (&str, Option<Uuid>, i64, &str, Decimal),
+    tax: TaxChoice,
 ) -> Result<Uuid> {
     let (description, product_id, quantity, unit, price) = line;
     create_draft(
@@ -101,16 +101,15 @@ fn draft(
                 quantity: Decimal::from(quantity),
                 unit: unit.into(),
                 unit_price: price,
-                tax: TaxChoice::Fixed(TaxCategory::Standard {
-                    rate: Decimal::from(19),
-                }),
+                tax,
             }],
         },
     )
 }
 
-/// Fills an empty database with two businesses, three customers, four
-/// products and six invoices in every state.
+/// Fills an empty database with two businesses (one small business), three
+/// customers, four products, ten documents in every state spread over
+/// several months, and revenue outside PsyBil for the small business.
 pub fn seed(tx: &Transaction, clock: &dyn Clock) -> Result<()> {
     let business = |name: &str, small_business: bool| NewBusiness {
         name: name.into(),
@@ -121,7 +120,11 @@ pub fn seed(tx: &Transaction, clock: &dyn Clock) -> Result<()> {
         small_business,
         ..NewBusiness::default()
     };
-    let (_, band) = create_business(tx, clock, business("Beispiel GbR", true))?;
+    let (band_business, band) = create_business(tx, clock, business("Beispiel GbR", true))?;
+    let small = TaxChoice::Fixed(TaxCategory::SmallBusiness);
+    let regular = TaxChoice::Fixed(TaxCategory::Standard {
+        rate: Decimal::from(19),
+    });
     let (_, studio) = create_business(tx, clock, business("Muster Studio", false))?;
     for (brand_id, color) in [(band, "#8839ef"), (studio, "#1e66f5")] {
         let mut brand = get_brand(tx, brand_id)?;
@@ -148,6 +151,7 @@ pub fn seed(tx: &Transaction, clock: &dyn Clock) -> Result<()> {
         "Stk",
         d(20),
         Some(d(20)),
+        small.clone(),
     )?;
     let cd = product(
         tx,
@@ -158,6 +162,7 @@ pub fn seed(tx: &Transaction, clock: &dyn Clock) -> Result<()> {
         "Stk",
         d(12),
         Some(d(50)),
+        small.clone(),
     )?;
     product(
         tx,
@@ -168,6 +173,7 @@ pub fn seed(tx: &Transaction, clock: &dyn Clock) -> Result<()> {
         "Pauschal",
         d(250),
         None,
+        regular.clone(),
     )?;
     product(
         tx,
@@ -178,6 +184,7 @@ pub fn seed(tx: &Transaction, clock: &dyn Clock) -> Result<()> {
         "Std.",
         d(45),
         None,
+        regular.clone(),
     )?;
 
     let issue = |tx: &Transaction, id: Uuid, paid: bool| {
@@ -198,6 +205,7 @@ pub fn seed(tx: &Transaction, clock: &dyn Clock) -> Result<()> {
         fan,
         0,
         ("Shirt", Some(shirt), 2, "Stk", d(20)),
+        small.clone(),
     )?;
     // Open and overdue.
     let overdue = draft(
@@ -207,6 +215,7 @@ pub fn seed(tx: &Transaction, clock: &dyn Clock) -> Result<()> {
         club,
         40,
         ("Auftritt", None, 1, "Pauschal", d(400)),
+        regular.clone(),
     )?;
     issue(tx, overdue, false)?;
     // Partly paid.
@@ -217,6 +226,7 @@ pub fn seed(tx: &Transaction, clock: &dyn Clock) -> Result<()> {
         festival,
         10,
         ("Stunde Technik", None, 6, "Std.", d(45)),
+        regular.clone(),
     )?;
     issue(tx, partly, false)?;
     add_payment(
@@ -228,9 +238,20 @@ pub fn seed(tx: &Transaction, clock: &dyn Clock) -> Result<()> {
         PaymentMethod::Transfer,
         "",
     )?;
-    // Paid.
-    let paid = draft(tx, clock, band, fan, 5, ("CD", Some(cd), 1, "Stk", d(12)))?;
-    issue(tx, paid, true)?;
+    // Paid gigs in earlier months, for the receipts per month; issued
+    // oldest first, so the numbers follow the dates.
+    for (days_ago, price) in [(120, 420), (80, 280), (45, 350)] {
+        let gig = draft(
+            tx,
+            clock,
+            band,
+            club,
+            days_ago,
+            ("Auftritt", None, 1, "Pauschal", d(price)),
+            small.clone(),
+        )?;
+        issue(tx, gig, true)?;
+    }
     // Cancelled, with its cancellation.
     let cancelled = draft(
         tx,
@@ -239,9 +260,50 @@ pub fn seed(tx: &Transaction, clock: &dyn Clock) -> Result<()> {
         club,
         20,
         ("Auftritt", None, 1, "Pauschal", d(300)),
+        small.clone(),
     )?;
     issue(tx, cancelled, false)?;
     cancel_invoice(tx, clock, cancelled)?;
+    // Paid.
+    let paid = draft(
+        tx,
+        clock,
+        band,
+        fan,
+        5,
+        ("CD", Some(cd), 1, "Stk", d(12)),
+        small.clone(),
+    )?;
+    issue(tx, paid, true)?;
+    // Open, not due yet.
+    let open = draft(
+        tx,
+        clock,
+        studio,
+        festival,
+        3,
+        ("Pauschale", None, 1, "Pauschal", d(250)),
+        regular.clone(),
+    )?;
+    issue(tx, open, false)?;
+    // Merch table and platform payouts, entered by hand.
+    let year = chrono::Datelike::year(&clock.today());
+    crate::overview::set_outside_revenue(
+        tx,
+        clock,
+        band_business,
+        year - 1,
+        Cents(1_840_000),
+        "Merchstand und Plattformen",
+    )?;
+    crate::overview::set_outside_revenue(
+        tx,
+        clock,
+        band_business,
+        year,
+        Cents(215_000),
+        "Merchstand",
+    )?;
     Ok(())
 }
 
@@ -276,7 +338,32 @@ mod tests {
             .sum();
         assert_eq!(products, 4);
         let rows = list_invoices(conn, &InvoiceFilter::default(), d(2026, 11, 18)).unwrap();
-        assert_eq!(rows.len(), 6);
+        assert_eq!(rows.len(), 10);
+        assert!(
+            rows.iter()
+                .any(|r| r.status.kind == StatusKind::Open && !r.status.overdue),
+            "a plain open invoice"
+        );
+        let band = list_businesses(conn, true)
+            .unwrap()
+            .into_iter()
+            .find(|b| b.small_business)
+            .unwrap();
+        for brand in crate::masterdata::list_brands(conn, band.id).unwrap() {
+            for p in list_products(conn, brand.id, true).unwrap() {
+                assert_eq!(
+                    p.tax,
+                    TaxChoice::Fixed(TaxCategory::SmallBusiness),
+                    "{}",
+                    p.name
+                );
+            }
+        }
+        let meter = &crate::overview::overview(conn, Some(band.id), d(2026, 11, 18))
+            .unwrap()
+            .meters[0];
+        assert!(meter.previous.0 >= 1_840_000);
+        assert!(meter.current.0 >= 215_000);
         let kinds: Vec<StatusKind> = rows.iter().map(|r| r.status.kind).collect();
         for kind in [
             StatusKind::Draft,

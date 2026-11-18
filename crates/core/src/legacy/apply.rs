@@ -27,6 +27,7 @@ use crate::tax::{TaxCategory, TaxChoice};
 use crate::{Error, Result};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ImportReport {
     pub businesses: usize,
     pub customers: usize,
@@ -40,7 +41,7 @@ pub struct ImportReport {
     pub already_present: usize,
 }
 
-fn cents(value: f64) -> Cents {
+pub(crate) fn cents(value: f64) -> Cents {
     Cents((value * 100.0).round() as i64)
 }
 

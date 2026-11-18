@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-export-original-pdf"
+description = "Enables the export_original_pdf command without any pre-configured scope."
+commands.allow = ["export_original_pdf"]
+
+[[permission]]
+identifier = "deny-export-original-pdf"
+description = "Denies the export_original_pdf command without any pre-configured scope."
+commands.deny = ["export_original_pdf"]

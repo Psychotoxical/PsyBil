@@ -1,17 +1,44 @@
 //! The PsyBil window: thin commands over `psybil-core`.
 
+pub mod background;
+mod backup_cmd;
 pub mod error;
+mod export_cmd;
+mod import_cmd;
 mod invoice_cmd;
 mod masterdata_cmd;
+mod overview_cmd;
 mod payment_cmd;
 mod pdf_cmd;
 mod settings_cmd;
 pub mod state;
+mod workspace_cmd;
 
-use tauri::Manager;
+use psybil_core::dates::SystemClock;
+use tauri::{Emitter, Manager};
+
+/// Runs the background beat every second and passes its news to the window.
+fn spawn_background(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let mut ticker = background::Ticker::new(std::time::Instant::now());
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let state = app.state::<state::AppState>();
+            let now = std::time::Instant::now();
+            for event in background::tick(&state, &mut ticker, now, &SystemClock) {
+                let _ = match event {
+                    background::Event::Status => {
+                        app.emit("workspace-status", workspace_cmd::status(&state))
+                    }
+                    background::Event::Merged(report) => app.emit("merge-report", report),
+                };
+            }
+        }
+    });
+}
 
 /// The frontend has drawn its first frame: show the window.
-#[tauri::command]
+#[tauri::command(async)]
 fn frontend_ready(window: tauri::WebviewWindow) {
     let _ = window.show();
     let _ = window.set_focus();
@@ -28,9 +55,19 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        // Used from Rust only, to show files PsyBil wrote; the window gets
+        // no opener permission.
+        .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
-            let data_dir = app.path().app_data_dir()?;
-            let config_dir = app.path().app_config_dir()?;
+            // `PSYBIL_HOME` keeps data and settings in one chosen folder, for
+            // trying PsyBil out without touching this computer's real data.
+            let (data_dir, config_dir) = match std::env::var_os("PSYBIL_HOME") {
+                Some(home) => {
+                    let home = std::path::PathBuf::from(home);
+                    (home.join("data"), home.join("config"))
+                }
+                None => (app.path().app_data_dir()?, app.path().app_config_dir()?),
+            };
             let state = state::AppState::open(&data_dir, &config_dir, demo)?;
             if demo {
                 // Folders of earlier demo runs; the app may end without dropping its state.
@@ -39,6 +76,7 @@ pub fn run() {
                 }
             }
             app.manage(state);
+            spawn_background(app.handle().clone());
             if let Some(window) = app.get_webview_window("main") {
                 if demo {
                     let _ = window.set_title("PsyBil (Demo)");
@@ -97,9 +135,48 @@ pub fn run() {
             pdf_cmd::preview_png,
             pdf_cmd::pdf_file_name,
             pdf_cmd::export_pdf,
+            overview_cmd::overview,
+            overview_cmd::set_outside_revenue,
+            overview_cmd::outside_revenue,
+            overview_cmd::year_summary,
+            export_cmd::export_year_report,
+            export_cmd::export_invoices_csv,
+            export_cmd::export_file_name,
+            export_cmd::reveal_exported,
+            backup_cmd::backup_now,
+            backup_cmd::list_backups,
+            backup_cmd::inspect_backup,
+            backup_cmd::restore_backup,
+            backup_cmd::reveal_backups_folder,
+            workspace_cmd::workspace_status,
+            workspace_cmd::reload_workspace,
+            workspace_cmd::take_over_lock,
+            workspace_cmd::force_take_over_lock,
+            workspace_cmd::merge_conflict_copies,
+            workspace_cmd::keep_other_version,
+            workspace_cmd::quarantine_entries,
+            workspace_cmd::choose_data_place,
+            workspace_cmd::finish_setup,
+            import_cmd::find_legacy_databases,
+            import_cmd::read_legacy,
+            import_cmd::apply_import,
+            import_cmd::cancel_import,
+            import_cmd::attach_original_pdf,
+            import_cmd::original_pdf_name,
+            import_cmd::export_original_pdf,
         ])
-        .run(tauri::generate_context!())
-        .expect("PsyBil failed to start");
+        .build(tauri::generate_context!())
+        .expect("PsyBil failed to start")
+        .run(|app, event| {
+            // Write back and release the lock of a shared folder. When that
+            // fails, the working copy keeps the changes for the next start.
+            if let tauri::RunEvent::Exit = event
+                && let Some(state) = app.try_state::<state::AppState>()
+                && let Err(e) = state.close_workspace()
+            {
+                eprintln!("PsyBil: writing back at exit failed: {}", e.message);
+            }
+        });
 }
 
 #[cfg(test)]
@@ -119,6 +196,25 @@ mod tests {
             .filter(|n| !n.is_empty())
             .map(|n| n.rsplit("::").next().unwrap().to_string())
             .collect()
+    }
+
+    /// Commands that are not `async` run on the main thread; while the
+    /// background writes back, they would freeze the window.
+    #[test]
+    fn every_command_runs_off_the_main_thread() {
+        let dir = format!("{}/src", env!("CARGO_MANIFEST_DIR"));
+        let mut blocking = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let text = std::fs::read_to_string(&path).unwrap();
+            for line in text.lines() {
+                let line = line.trim();
+                if line.starts_with("#[tauri::command") && !line.contains("async") {
+                    blocking.push(format!("{}: {line}", path.display()));
+                }
+            }
+        }
+        assert!(blocking.is_empty(), "{blocking:#?}");
     }
 
     #[test]

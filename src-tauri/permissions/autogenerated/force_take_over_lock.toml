@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-force-take-over-lock"
+description = "Enables the force_take_over_lock command without any pre-configured scope."
+commands.allow = ["force_take_over_lock"]
+
+[[permission]]
+identifier = "deny-force-take-over-lock"
+description = "Denies the force_take_over_lock command without any pre-configured scope."
+commands.deny = ["force_take_over_lock"]

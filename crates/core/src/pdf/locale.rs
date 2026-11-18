@@ -7,14 +7,14 @@ use crate::money::Cents;
 use crate::tax::TaxCategory;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Lang {
+pub enum Lang {
     De,
     En,
 }
 
 impl Lang {
     /// `"en"` (also `"en-GB"` and the like) is English, everything else German.
-    pub(crate) fn from_code(code: &str) -> Lang {
+    pub fn from_code(code: &str) -> Lang {
         if code.trim().to_lowercase().starts_with("en") {
             Lang::En
         } else {

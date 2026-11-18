@@ -32,7 +32,7 @@ pub fn product_line_inner(
     Ok(invoice::product_line(&product, price_mode))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn product_line(
     state: State<'_, AppState>,
     product_id: Uuid,
@@ -41,37 +41,37 @@ pub fn product_line(
     product_line_inner(&state, product_id, price_mode)
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn load_invoice(state: State<'_, AppState>, id: Uuid) -> CmdResult<Invoice> {
     state.read(|c| invoice::load_invoice(c, id))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn create_draft(state: State<'_, AppState>, input: DraftInput) -> CmdResult<Uuid> {
     state.write(|tx| invoice::create_draft(tx, &SystemClock, input))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn save_draft(state: State<'_, AppState>, id: Uuid, input: DraftInput) -> CmdResult<()> {
     state.write(|tx| invoice::save_draft(tx, &SystemClock, id, input))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn delete_draft(state: State<'_, AppState>, id: Uuid) -> CmdResult<()> {
     state.write(|tx| invoice::delete_draft(tx, &SystemClock, id))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn draft_totals(state: State<'_, AppState>, id: Uuid) -> CmdResult<Totals> {
     state.read(|c| invoice::draft_totals(c, id))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn check_issue(state: State<'_, AppState>, id: Uuid) -> CmdResult<Vec<Issue>> {
     state.read(|c| psybil_core::validate::check_issue(c, id))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn peek_number(state: State<'_, AppState>, id: Uuid) -> CmdResult<String> {
     state.read(|c| psybil_core::numbering::peek_number(c, id))
 }
@@ -88,22 +88,22 @@ pub fn issue_invoice(
     })
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn cancel_invoice(state: State<'_, AppState>, id: Uuid) -> CmdResult<Uuid> {
     state.write(|tx| psybil_core::storno::cancel_invoice(tx, &SystemClock, id))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn correct_invoice(state: State<'_, AppState>, id: Uuid) -> CmdResult<(Uuid, Uuid)> {
     state.write(|tx| psybil_core::storno::correct_invoice(tx, &SystemClock, id))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn duplicate_as_draft(state: State<'_, AppState>, id: Uuid) -> CmdResult<Uuid> {
     state.write(|tx| invoice::duplicate_as_draft(tx, &SystemClock, id))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn invoice_status(state: State<'_, AppState>, id: Uuid) -> CmdResult<InvoiceStatus> {
     state.read(|c| psybil_core::payments::invoice_status(c, id, SystemClock.today()))
 }

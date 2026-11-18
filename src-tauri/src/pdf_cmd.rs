@@ -17,7 +17,7 @@ pub fn preview_png(state: State<'_, AppState>, id: Uuid, width_px: u32) -> CmdRe
         .collect())
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(async, rename_all = "snake_case")]
 pub fn pdf_file_name(state: State<'_, AppState>, id: Uuid) -> CmdResult<String> {
     state.read(|c| psybil_core::pdf::export::pdf_file_name_for(c, id))
 }
@@ -25,6 +25,7 @@ pub fn pdf_file_name(state: State<'_, AppState>, id: Uuid) -> CmdResult<String> 
 pub fn export_pdf_inner(state: &AppState, id: Uuid, path: &str) -> CmdResult<String> {
     let written =
         state.read(|c| psybil_core::pdf::export_pdf(c, id, std::path::Path::new(path)))?;
+    state.note_exported(&written);
     Ok(written.to_string_lossy().into_owned())
 }
 

@@ -94,6 +94,15 @@ fn metadata(doc: &InvoiceDoc) -> Metadata {
 
 fn render_with(doc: &InvoiceDoc, logo: Option<&Image>) -> Result<Vec<u8>> {
     let pages = layout(doc, logo.map(Image::size));
+    write_pages(&pages, metadata(doc), logo)
+}
+
+/// Writes laid-out A4 pages as a PDF/A-3b document.
+pub(crate) fn write_pages(
+    pages: &[PageOps],
+    metadata: Metadata,
+    logo: Option<&Image>,
+) -> Result<Vec<u8>> {
     let configuration = ConfigurationBuilder::new()
         .with_archival_validator(Archival::A3_B)
         .finish()
@@ -102,9 +111,9 @@ fn render_with(doc: &InvoiceDoc, logo: Option<&Image>) -> Result<Vec<u8>> {
         configuration,
         ..SerializeSettings::default()
     });
-    document.set_metadata(metadata(doc));
+    document.set_metadata(metadata);
     let settings = PageSettings::from_wh(PAGE_W, PAGE_H).ok_or_else(|| pdf_error("page size"))?;
-    for page_ops in &pages {
+    for page_ops in pages {
         let mut page = document.start_page_with(settings.clone());
         let mut surface = page.surface();
         draw_page(&mut surface, page_ops, logo);

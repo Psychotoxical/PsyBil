@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-outside-revenue"
+description = "Enables the set_outside_revenue command without any pre-configured scope."
+commands.allow = ["set_outside_revenue"]
+
+[[permission]]
+identifier = "deny-set-outside-revenue"
+description = "Denies the set_outside_revenue command without any pre-configured scope."
+commands.deny = ["set_outside_revenue"]

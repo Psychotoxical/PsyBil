@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-original-pdf-name"
+description = "Enables the original_pdf_name command without any pre-configured scope."
+commands.allow = ["original_pdf_name"]
+
+[[permission]]
+identifier = "deny-original-pdf-name"
+description = "Denies the original_pdf_name command without any pre-configured scope."
+commands.deny = ["original_pdf_name"]

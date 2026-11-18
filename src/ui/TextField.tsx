@@ -1,5 +1,5 @@
 import { type HTMLAttributes, useId } from "react";
-import { Field } from "./Field";
+import { describedBy, Field } from "./Field";
 
 type Props = {
   label: string;
@@ -44,7 +44,7 @@ export function TextField({
     autoComplete: "off",
     className: mono ? "field-input num" : "field-input",
     "aria-invalid": invalid || undefined,
-    "aria-describedby": hint ? `${id}-hint` : undefined,
+    "aria-describedby": describedBy(id, hint, unit),
   };
   return (
     <Field id={id} label={label} hint={hint} unit={unit} invalid={invalid} wide={wide || multiline}>

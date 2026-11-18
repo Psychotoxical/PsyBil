@@ -24,6 +24,7 @@ pub struct Device {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct LockInfo {
     pub device_id: Uuid,
     pub device_name: String,
@@ -125,6 +126,18 @@ pub fn take_over(dir: &Path, me: &Device, user: &str, now: DateTime<Utc>) -> Res
     }
 }
 
+/// Takes the lock whoever holds it ("take over anyway").
+pub fn force_take_over(
+    dir: &Path,
+    me: &Device,
+    user: &str,
+    now: DateTime<Utc>,
+) -> Result<LockInfo> {
+    let info = fresh(me, user, now);
+    write(dir, me, &info)?;
+    Ok(info)
+}
+
 /// Renews the heartbeat of one's own lock.
 pub fn heartbeat(dir: &Path, me: &Device, now: DateTime<Utc>) -> Result<()> {
     match read_lock(dir, me, now)? {
@@ -169,7 +182,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let me = device("PC");
         assert_eq!(read_lock(dir.path(), &me, t(0)).unwrap(), LockState::Free);
-        let info = acquire(dir.path(), &me, "frank", t(0)).unwrap();
+        let info = acquire(dir.path(), &me, "nutzer", t(0)).unwrap();
         assert_eq!(info.device_name, "PC");
         assert!(matches!(
             read_lock(dir.path(), &me, t(10)).unwrap(),
@@ -181,17 +194,17 @@ mod tests {
     fn other_fresh_lock_is_held() {
         let dir = tempfile::tempdir().unwrap();
         let (pc, mac) = (device("PC"), device("Mac"));
-        acquire(dir.path(), &pc, "frank", t(0)).unwrap();
+        acquire(dir.path(), &pc, "nutzer", t(0)).unwrap();
         assert!(matches!(
             read_lock(dir.path(), &mac, t(240)).unwrap(),
             LockState::Held(_)
         ));
         assert!(matches!(
-            acquire(dir.path(), &mac, "frank", t(240)),
+            acquire(dir.path(), &mac, "nutzer", t(240)),
             Err(Error::LockHeld(_))
         ));
         assert!(matches!(
-            take_over(dir.path(), &mac, "frank", t(240)),
+            take_over(dir.path(), &mac, "nutzer", t(240)),
             Err(Error::LockHeld(_))
         ));
     }
@@ -200,13 +213,13 @@ mod tests {
     fn lock_older_than_five_minutes_is_stale() {
         let dir = tempfile::tempdir().unwrap();
         let (pc, mac) = (device("PC"), device("Mac"));
-        acquire(dir.path(), &pc, "frank", t(0)).unwrap();
+        acquire(dir.path(), &pc, "nutzer", t(0)).unwrap();
         assert!(matches!(
             read_lock(dir.path(), &mac, t(301)).unwrap(),
             LockState::Stale(_)
         ));
         assert!(matches!(
-            acquire(dir.path(), &mac, "frank", t(301)),
+            acquire(dir.path(), &mac, "nutzer", t(301)),
             Err(Error::LockStale(_))
         ));
     }
@@ -215,8 +228,8 @@ mod tests {
     fn take_over_replaces_stale() {
         let dir = tempfile::tempdir().unwrap();
         let (pc, mac) = (device("PC"), device("Mac"));
-        acquire(dir.path(), &pc, "frank", t(0)).unwrap();
-        take_over(dir.path(), &mac, "frank", t(400)).unwrap();
+        acquire(dir.path(), &pc, "nutzer", t(0)).unwrap();
+        take_over(dir.path(), &mac, "nutzer", t(400)).unwrap();
         assert!(matches!(
             read_lock(dir.path(), &mac, t(401)).unwrap(),
             LockState::Mine(_)
@@ -231,7 +244,7 @@ mod tests {
     fn heartbeat_keeps_fresh() {
         let dir = tempfile::tempdir().unwrap();
         let (pc, mac) = (device("PC"), device("Mac"));
-        acquire(dir.path(), &pc, "frank", t(0)).unwrap();
+        acquire(dir.path(), &pc, "nutzer", t(0)).unwrap();
         heartbeat(dir.path(), &pc, t(280)).unwrap();
         assert!(matches!(
             read_lock(dir.path(), &mac, t(500)).unwrap(),
@@ -247,7 +260,7 @@ mod tests {
     fn release_only_own_lock() {
         let dir = tempfile::tempdir().unwrap();
         let (pc, mac) = (device("PC"), device("Mac"));
-        acquire(dir.path(), &pc, "frank", t(0)).unwrap();
+        acquire(dir.path(), &pc, "nutzer", t(0)).unwrap();
         release(dir.path(), &mac).unwrap();
         assert!(matches!(
             read_lock(dir.path(), &mac, t(1)).unwrap(),
@@ -266,7 +279,7 @@ mod tests {
             read_lock(dir.path(), &me, t(0)).unwrap(),
             LockState::Stale(_)
         ));
-        take_over(dir.path(), &me, "frank", t(0)).unwrap();
+        take_over(dir.path(), &me, "nutzer", t(0)).unwrap();
         assert!(matches!(
             read_lock(dir.path(), &me, t(0)).unwrap(),
             LockState::Mine(_)

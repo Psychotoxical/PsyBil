@@ -1,6 +1,7 @@
 import "./fields.css";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { useReadOnly } from "../store/workspace";
 
 type Props = {
   formId: string;
@@ -16,13 +17,16 @@ type Props = {
 /** The bar under a form: further actions, what is missing, discard and save. */
 export function FormBar({ formId, missing, busy, dirty, onDiscard, extra }: Props) {
   const { t } = useTranslation();
-  const blocked = missing.length > 0;
+  const readOnly = useReadOnly();
+  // While another computer writes, the reason replaces the list of what is missing.
+  const reasons = readOnly ? [readOnly] : missing;
+  const blocked = reasons.length > 0;
   return (
     <div className="form-bar">
       <div className="form-bar-extra">{extra}</div>
       {blocked && (
         <p className="form-missing" id={`${formId}-missing`} aria-live="polite">
-          {missing.map((m) => (
+          {reasons.map((m) => (
             <span key={m}>{m}</span>
           ))}
         </p>

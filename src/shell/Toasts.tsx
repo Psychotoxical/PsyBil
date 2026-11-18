@@ -23,6 +23,18 @@ export function Toasts() {
             <Info size={18} aria-hidden="true" />
           )}
           <span>{toast.text}</span>
+          {toast.action && (
+            <button
+              type="button"
+              className="btn toast-action"
+              onClick={() => {
+                toast.action?.run();
+                dismiss(toast.id);
+              }}
+            >
+              {toast.action.label}
+            </button>
+          )}
           <button
             type="button"
             className="icon-btn"

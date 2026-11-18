@@ -34,7 +34,13 @@ pub fn pdf_file_name(doc: &InvoiceDoc) -> String {
 /// chose) and returns its path. A temporary file next to it is forced onto
 /// the disk and renamed, so no half-written PDF is left behind.
 pub fn export_pdf(conn: &Connection, id: Uuid, target: &Path) -> Result<PathBuf> {
-    let pdf = invoice_pdf(conn, id)?;
+    write_file(target, &invoice_pdf(conn, id)?)
+}
+
+/// Writes `bytes` to `target` the safe way: a temporary file next to it,
+/// forced onto the disk, then renamed. Returns `target`.
+pub fn write_file(target: &Path, bytes: &[u8]) -> Result<PathBuf> {
+    let pdf = bytes;
     let folder = target
         .parent()
         .filter(|p| p.is_dir())
@@ -42,7 +48,7 @@ pub fn export_pdf(conn: &Connection, id: Uuid, target: &Path) -> Result<PathBuf>
     let tmp = folder.join(format!(".psybil-{}.tmp", Uuid::new_v4()));
     let written = std::fs::File::create(&tmp).and_then(|mut f| {
         use std::io::Write;
-        f.write_all(&pdf)?;
+        f.write_all(pdf)?;
         f.sync_all()
     });
     if let Err(e) = written.and_then(|()| std::fs::rename(&tmp, target)) {
@@ -64,7 +70,7 @@ pub fn pdf_file_name_for(conn: &Connection, id: Uuid) -> Result<String> {
 
 /// Turns any text into a safe file name stem: letters, digits, `-` and `.`
 /// stay, everything else becomes one `_`.
-fn safe_stem(raw: &str) -> String {
+pub(crate) fn safe_stem(raw: &str) -> String {
     let mut stem = String::new();
     for c in raw.chars() {
         let c = if c.is_alphanumeric() || c == '-' || c == '.' {
