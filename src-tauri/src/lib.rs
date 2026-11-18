@@ -234,4 +234,82 @@ mod tests {
         assert_eq!(commands, handlers, "build.rs vs generate_handler");
         assert_eq!(commands, granted, "build.rs vs capabilities/main.json");
     }
+
+    /// A strict CSP without outside sources: the window loads nothing from
+    /// the internet.
+    #[test]
+    fn csp_allows_no_outside_sources() {
+        let conf: serde_json::Value = serde_json::from_str(&read("tauri.conf.json")).unwrap();
+        let csp = conf["app"]["security"]["csp"].as_object().unwrap();
+        assert!(csp.len() > 5);
+        for (directive, sources) in csp {
+            for source in sources.as_str().unwrap().split_whitespace() {
+                let allowed = match source {
+                    "'self'" | "'none'" | "data:" | "blob:" | "ipc:" | "http://ipc.localhost" => {
+                        true
+                    }
+                    "'unsafe-inline'" => directive == "style-src",
+                    _ => false,
+                };
+                assert!(allowed, "{directive}: {source}");
+            }
+        }
+    }
+
+    fn be_u32(bytes: &[u8], at: usize) -> u32 {
+        u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap())
+    }
+
+    /// The icon set the bundles take: every PNG has the size its name says,
+    /// the Windows icon carries the sizes Explorer and the taskbar pick
+    /// from, and the macOS icon goes up to 1024 px.
+    #[test]
+    fn bundle_icons_exist_with_their_sizes() {
+        let conf: serde_json::Value = serde_json::from_str(&read("tauri.conf.json")).unwrap();
+        let icons = conf["bundle"]["icon"].as_array().unwrap();
+        assert_eq!(icons.len(), 5);
+        for icon in icons {
+            let path = icon.as_str().unwrap();
+            let bytes = std::fs::read(format!("{}/{path}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+            let name = path.rsplit('/').next().unwrap();
+            if let Some(stem) = name.strip_suffix(".png") {
+                let (size, scale) = match stem.split_once('@') {
+                    Some((size, "2x")) => (size, 2),
+                    _ => (stem, 1),
+                };
+                let (w, h) = size.split_once('x').unwrap();
+                let expected = (
+                    w.parse::<u32>().unwrap() * scale,
+                    h.parse::<u32>().unwrap() * scale,
+                );
+                assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "{path}");
+                assert_eq!((be_u32(&bytes, 16), be_u32(&bytes, 20)), expected, "{path}");
+            } else if name.ends_with(".ico") {
+                let count = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
+                let sizes: BTreeSet<u32> = (0..count)
+                    .map(|i| match bytes[6 + 16 * i] {
+                        0 => 256,
+                        w => u32::from(w),
+                    })
+                    .collect();
+                assert_eq!(sizes, BTreeSet::from([16, 24, 32, 48, 64, 256]), "{path}");
+            } else if name.ends_with(".icns") {
+                assert_eq!(&bytes[..4], b"icns", "{path}");
+                let mut types = BTreeSet::new();
+                let mut at = 8;
+                while at + 8 <= bytes.len() {
+                    let len = be_u32(&bytes, at + 4) as usize;
+                    assert!(len >= 8, "{path}: broken entry");
+                    types.insert(String::from_utf8_lossy(&bytes[at..at + 4]).into_owned());
+                    at += len;
+                }
+                // 128, 256, 512 and 1024 px.
+                for kind in ["ic07", "ic08", "ic09", "ic10"] {
+                    assert!(types.contains(kind), "{path} lacks {kind}");
+                }
+            } else {
+                panic!("unexpected icon {path}");
+            }
+        }
+    }
 }

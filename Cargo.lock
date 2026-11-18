@@ -3528,7 +3528,7 @@ dependencies = [
 
 [[package]]
 name = "psybil"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -3546,7 +3546,7 @@ dependencies = [
 
 [[package]]
 name = "psybil-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",

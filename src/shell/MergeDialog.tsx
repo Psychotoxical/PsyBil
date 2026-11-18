@@ -49,6 +49,7 @@ function Report({ report, onClose }: { report: MergeReport; onClose: () => void 
     cancelled_on_both_sides: t("cancelled on both computers"),
     depends_on_quarantined: t("belongs to a document that was put aside"),
     number_collision: t("number used twice"),
+    unreadable_date: t("a date could not be read"),
   };
 
   useEffect(() => {

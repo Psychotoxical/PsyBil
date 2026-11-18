@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime};
 use rusqlite::{OptionalExtension, Transaction, params};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
@@ -39,6 +39,16 @@ pub struct ImportReport {
     pub needs_review: usize,
     /// Invoices and drafts that an earlier import already took over.
     pub already_present: usize,
+    /// Each document counted in `quarantined`, so the person can find it.
+    pub set_aside: Vec<SetAside>,
+}
+
+/// A document the import put aside: its number and why.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+pub struct SetAside {
+    pub number: String,
+    pub reason: String,
 }
 
 pub(crate) fn cents(value: f64) -> Cents {
@@ -162,9 +172,29 @@ fn payment_method(old: &str) -> &'static str {
     }
 }
 
+/// VibeBill wrote plain dates; a file that went through other hands may
+/// carry a time as well. The date part counts.
 fn parse_date(text: &str) -> Result<NaiveDate> {
-    NaiveDate::parse_from_str(text.trim(), "%Y-%m-%d")
-        .map_err(|_| Error::Import(format!("unreadable date {text:?}")))
+    let text = text.trim();
+    let with_time = |format: &str| {
+        NaiveDateTime::parse_from_str(text.trim_end_matches('Z'), format)
+            .ok()
+            .map(|t| t.date())
+    };
+    NaiveDate::parse_from_str(text, "%Y-%m-%d")
+        .ok()
+        .or_else(|| with_time("%Y-%m-%d %H:%M:%S%.f"))
+        .or_else(|| with_time("%Y-%m-%dT%H:%M:%S%.f"))
+        .ok_or_else(|| Error::Import(format!("unreadable date {text:?}")))
+}
+
+/// True when the invoice date or a payment date of `old` cannot be read.
+fn has_unreadable_date(data: &LegacyData, old: &LegacyInvoice) -> bool {
+    parse_date(&old.date).is_err()
+        || data
+            .payments
+            .iter()
+            .any(|p| p.invoice_id == old.id && parse_date(&p.date).is_err())
 }
 
 fn fill_brand(brand: &mut Brand, seller: &LegacySeller) {
@@ -442,6 +472,23 @@ fn import_invoice(
     customers: &HashMap<i64, Uuid>,
     products: &HashMap<i64, Uuid>,
 ) -> Result<()> {
+    // One unreadable date must not stop the whole import: that document
+    // goes aside with its payments, the others come in.
+    if has_unreadable_date(data, old) {
+        quarantine(
+            tx,
+            clock,
+            "legacy_invoice",
+            "unreadable_date",
+            serde_json::json!({ "invoice": old, "payments": data.payments.iter().filter(|p| p.invoice_id == old.id).collect::<Vec<_>>() }),
+        )?;
+        report.quarantined += 1;
+        report.set_aside.push(SetAside {
+            number: old.invoice_number.clone(),
+            reason: "unreadable_date".into(),
+        });
+        return Ok(());
+    }
     // A document that was sent with VAT keeps its rates, even for a small
     // business: it has to show what the customer received. Drafts are
     // issued later and follow the business.
@@ -540,6 +587,10 @@ fn import_invoice(
             serde_json::json!({ "invoice": old, "payments": data.payments.iter().filter(|p| p.invoice_id == old.id).collect::<Vec<_>>() }),
         )?;
         report.quarantined += 1;
+        report.set_aside.push(SetAside {
+            number: old.invoice_number.clone(),
+            reason: "number_collision".into(),
+        });
         return Ok(());
     }
 
@@ -666,6 +717,104 @@ mod tests {
             })
             .unwrap();
         load_invoice(db.read(), id.parse().unwrap()).unwrap()
+    }
+
+    fn dates_with_time(path: &std::path::Path) {
+        full_db(path);
+        rusqlite::Connection::open(path)
+            .unwrap()
+            .execute_batch(
+                "UPDATE invoices SET date = '2026-03-10 14:05:00' WHERE id = 1;
+                 UPDATE invoices SET date = '2026-04-02T08:00:00' WHERE id = 2;
+                 UPDATE payments SET date = '2026-04-10T09:30:00.123Z' WHERE invoice_id = 2;",
+            )
+            .unwrap();
+    }
+
+    fn unreadable_invoice_date(path: &std::path::Path) {
+        full_db(path);
+        rusqlite::Connection::open(path)
+            .unwrap()
+            .execute("UPDATE invoices SET date = 'irgendwann' WHERE id = 2", [])
+            .unwrap();
+    }
+
+    fn unreadable_payment_date(path: &std::path::Path) {
+        full_db(path);
+        rusqlite::Connection::open(path)
+            .unwrap()
+            .execute("UPDATE payments SET date = '' WHERE invoice_id = 2", [])
+            .unwrap();
+    }
+
+    fn quarantine_reasons(db: &Db) -> Vec<String> {
+        let mut stmt = db
+            .read()
+            .prepare("SELECT reason FROM merge_quarantine ORDER BY reason")
+            .unwrap();
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap()
+    }
+
+    fn count_number(db: &Db, number: &str) -> i64 {
+        db.read()
+            .query_row(
+                "SELECT COUNT(*) FROM invoices WHERE number = ?1",
+                [number],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn import_reads_date_with_time() {
+        let mut db = Db::open_in_memory().unwrap();
+        let r = import_into(&mut db, dates_with_time, true);
+        assert_eq!((r.drafts, r.issued, r.quarantined), (1, 4, 1));
+        assert_eq!(by_number(&db, "RE-2026-0001").invoice_date, d(2026, 3, 10));
+        let partial = by_number(&db, "RE-2026-0002");
+        assert_eq!(partial.invoice_date, d(2026, 4, 2));
+        assert_eq!(
+            list_payments(db.read(), partial.id).unwrap()[0].date,
+            d(2026, 4, 10)
+        );
+    }
+
+    #[test]
+    fn unreadable_date_puts_invoice_aside() {
+        for build in [unreadable_invoice_date, unreadable_payment_date] {
+            let mut db = Db::open_in_memory().unwrap();
+            let r = import_into(&mut db, build, true);
+            // RE-2026-0002 goes aside next to the known number collision;
+            // everything else arrives.
+            assert_eq!((r.drafts, r.issued, r.quarantined), (1, 3, 2));
+            assert_eq!(
+                quarantine_reasons(&db),
+                ["number_collision", "unreadable_date"]
+            );
+            assert_eq!(count_number(&db, "RE-2026-0002"), 0);
+            assert_eq!(count_number(&db, "RE-2026-0001"), 1);
+        }
+    }
+
+    #[test]
+    fn report_names_each_invoice_set_aside() {
+        let mut db = Db::open_in_memory().unwrap();
+        let r = import_into(&mut db, unreadable_invoice_date, true);
+        assert_eq!(r.set_aside.len(), r.quarantined);
+        let aside: Vec<_> = r
+            .set_aside
+            .iter()
+            .map(|s| (s.number.as_str(), s.reason.as_str()))
+            .collect();
+        assert!(aside.contains(&("RE-2026-0002", "unreadable_date")));
+        assert!(
+            aside
+                .iter()
+                .any(|(_, reason)| *reason == "number_collision")
+        );
     }
 
     #[test]

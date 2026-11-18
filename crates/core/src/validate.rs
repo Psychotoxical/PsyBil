@@ -39,6 +39,7 @@ pub enum IssueKind {
     CustomerAddress,
     CustomerKindUnknown,
     ServiceDate,
+    ServicePeriodOrder,
     ExemptReason { position: u32 },
     TaxRate { position: u32 },
     SmallBusinessLine { position: u32 },
@@ -123,6 +124,11 @@ pub fn check_issue(conn: &Connection, invoice_id: Uuid) -> Result<Vec<Issue>> {
     }
     if full_contents && invoice.service_date == ServiceDate::None {
         error(IssueKind::ServiceDate);
+    }
+    if let ServiceDate::Period { from, to } = &invoice.service_date
+        && from > to
+    {
+        error(IssueKind::ServicePeriodOrder);
     }
 
     if !business.small_business {
@@ -305,6 +311,28 @@ mod tests {
     #[test]
     fn complete_regular_invoice_has_no_errors() {
         let issues = issues_for(sample_business(), Some(sample_customer()), |_| {});
+        assert_eq!(issues, vec![]);
+    }
+
+    #[test]
+    fn period_ending_before_start_blocks_issuing() {
+        let issues = issues_for(sample_business(), Some(sample_customer()), |input| {
+            input.service_date = ServiceDate::Period {
+                from: crate::testutil::d(2026, 3, 10),
+                to: crate::testutil::d(2026, 3, 1),
+            };
+        });
+        assert_eq!(errors(&issues), vec![IssueKind::ServicePeriodOrder]);
+    }
+
+    #[test]
+    fn one_day_period_is_allowed() {
+        let issues = issues_for(sample_business(), Some(sample_customer()), |input| {
+            input.service_date = ServiceDate::Period {
+                from: crate::testutil::d(2026, 3, 1),
+                to: crate::testutil::d(2026, 3, 1),
+            };
+        });
         assert_eq!(issues, vec![]);
     }
 

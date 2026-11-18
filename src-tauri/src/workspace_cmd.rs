@@ -687,6 +687,26 @@ mod tests {
     }
 
     #[test]
+    fn move_refused_while_read_only_changes_nothing() {
+        let dir = filled_shared("Kunde Fern");
+        lockfile::acquire(dir.path(), &mac(), "band", Utc::now()).unwrap();
+        let (state, _dirs) = state_with(shared(dir.path()));
+        assert_eq!(status(&state).access, "read_only");
+        let err = choose_data_place_inner(&state, DataPlace::Local, PlaceMode::Move).unwrap_err();
+        assert_eq!(err.code, "read_only");
+        // The other computer keeps working on the shared data alone.
+        assert_eq!(lock(&state.settings).data, shared(dir.path()));
+        assert!(!state.app_data.join("psybil.db").exists());
+        let kinds: Vec<_> = psybil_core::backup::list_backups(&state.backups_dir())
+            .unwrap()
+            .into_iter()
+            .map(|b| b.kind)
+            .collect();
+        assert!(!kinds.contains(&psybil_core::backup::BackupKind::BeforeMove));
+        assert_eq!(status(&state).access, "read_only");
+    }
+
+    #[test]
     fn place_switch_clears_old_flags() {
         let (state, _dirs) = state_with(DataPlace::Local);
         {

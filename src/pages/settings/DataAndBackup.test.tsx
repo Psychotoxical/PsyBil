@@ -152,6 +152,32 @@ describe("data place and backups", () => {
     expect(await screen.findByText("Noch keine Sicherung vorhanden.")).toBeInTheDocument();
   });
 
+  it("place_change_disabled_while_read_only", () => {
+    useWorkspace.setState({
+      status: {
+        ...STATUS,
+        place: { kind: "shared", dir: "C:/Temp/Nextcloud/PsyBil" },
+        access: "read_only",
+        holder: {
+          device_id: "d2",
+          device_name: "Mac",
+          user: "band",
+          started: "2026-11-18T08:00:00Z",
+          heartbeat: "2026-11-18T09:00:00Z",
+        },
+      },
+    });
+    render(<DataPlaceSection />);
+    const hint =
+      "Solange ein anderer Rechner mit den Daten arbeitet, lässt sich der Datenordner nicht ändern.";
+    expect(screen.getByText(hint)).toBeInTheDocument();
+    for (const name of ["Anderen Ordner wählen …", "Zurück auf nur diesen Rechner"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAccessibleDescription(hint);
+    }
+  });
+
   it("demo_keeps_the_data_place", () => {
     useWorkspace.setState({ status: { ...STATUS, demo: true } });
     render(<DataPlaceSection />);

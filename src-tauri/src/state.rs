@@ -88,9 +88,47 @@ pub(crate) fn user_name() -> String {
 
 /// The name of this computer, shown to others when it holds the lock.
 fn device_name() -> String {
-    std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "PsyBil".into())
+    first_name([
+        std::env::var("COMPUTERNAME").ok(),
+        std::env::var("HOSTNAME").ok(),
+        system_name(),
+    ])
+}
+
+/// The first name that is not blank, trimmed; "PsyBil" when there is none.
+fn first_name(names: impl IntoIterator<Item = Option<String>>) -> String {
+    names
+        .into_iter()
+        .flatten()
+        .map(|n| n.trim().to_string())
+        .find(|n| !n.is_empty())
+        .unwrap_or_else(|| "PsyBil".into())
+}
+
+/// The name the system gives this computer: the one shown in the Mac's
+/// sharing settings, the kernel's host name on Linux.
+#[cfg(target_os = "macos")]
+fn system_name() -> Option<String> {
+    let out = std::process::Command::new("scutil")
+        .args(["--get", "ComputerName"])
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn system_name() -> Option<String> {
+    ["/proc/sys/kernel/hostname", "/etc/hostname"]
+        .iter()
+        .find_map(|p| std::fs::read_to_string(p).ok())
+}
+
+/// Windows always sets COMPUTERNAME.
+#[cfg(windows)]
+fn system_name() -> Option<String> {
+    None
 }
 
 /// Where the data of `place` lives. A shared folder gets its own cache, so
@@ -300,6 +338,21 @@ pub(crate) mod tests {
         settings.save(&config.path().join("settings.json")).unwrap();
         let state = AppState::open(data.path(), config.path(), false).unwrap();
         (state, (data, config))
+    }
+
+    #[test]
+    fn device_name_takes_first_real_name() {
+        let name = first_name([None, Some("  ".into()), Some(" studio-box\n".into())]);
+        assert_eq!(name, "studio-box");
+        assert_eq!(first_name([None, None]), "PsyBil");
+    }
+
+    // GUI apps on macOS and Linux get no HOSTNAME variable: the system names
+    // the computer instead.
+    #[cfg(unix)]
+    #[test]
+    fn system_names_this_computer() {
+        assert!(system_name().is_some_and(|n| !n.trim().is_empty()));
     }
 
     #[test]

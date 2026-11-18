@@ -1,0 +1,229 @@
+name: Packages
+
+# Builds every package once. Called by the channel workflow for a release candidate or a
+# release, and by hand. Pull requests test on Linux only, so the Windows and macOS jobs run the
+# tests of their system before they build. Every job uploads its
+# files as an artifact whose name starts with "pkg-"; the channel workflow puts all files of
+# those artifacts into the draft. The file names match .github/release/downloads.md.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Branch, tag or commit to build
+        type: string
+        default: ""
+      signed:
+        description: macOS disk image must be signed and notarized (fails without the Apple secrets)
+        type: boolean
+        default: false
+      file_version:
+        description: Version in the file names, e.g. 1.2.0-rc.1 (empty = the version in package.json)
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to build (empty = the chosen branch)
+        type: string
+        default: ""
+      signed:
+        description: macOS disk image must be signed and notarized (fails without the Apple secrets)
+        type: boolean
+        default: false
+      file_version:
+        description: Version in the file names, e.g. 1.2.0-rc.1 (empty = the version in package.json)
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # the oldest supported Ubuntu, so the AppImage runs on older systems too
+          - { name: linux, runner: ubuntu-22.04, bundles: "appimage,deb,rpm", target: "" }
+          - { name: windows, runner: windows-latest, bundles: nsis, target: "" }
+          # one disk image for Apple Silicon and Intel
+          - { name: macos, runner: macos-15, bundles: dmg, target: universal-apple-darwin }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential file libxdo-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: packages
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # the CI tests pull requests and main on Linux only; the other systems test here
+      - name: Tests (${{ runner.os }})
+        if: matrix.name != 'linux'
+        shell: bash
+        run: |
+          npm test
+          npm run build
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
+
+      # Developer ID signing and notarization by Tauri itself. Without the secrets (a pull request
+      # from a fork) the disk image is signed ad hoc; a release or release candidate fails instead.
+      - name: Apple signing
+        if: matrix.name == 'macos'
+        shell: bash
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          API_KEY: ${{ secrets.APPLE_API_KEY }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          API_KEY_B64: ${{ secrets.APPLE_API_KEY_B64 }}
+          SIGNED: ${{ inputs.signed }}
+        run: |
+          if [ -z "$CERT" ] || [ -z "$IDENTITY" ] || [ -z "$API_KEY_B64" ]; then
+            if [ "$SIGNED" = "true" ]; then
+              echo "::error::The Apple secrets are missing: a release disk image must be signed and notarized."
+              exit 1
+            fi
+            echo "::notice::No Apple secrets: the disk image is signed ad hoc."
+            exit 0
+          fi
+          printf '%s' "$API_KEY_B64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+          {
+            echo "APPLE_CERTIFICATE=$CERT"
+            echo "APPLE_CERTIFICATE_PASSWORD=$CERT_PASSWORD"
+            echo "APPLE_SIGNING_IDENTITY=$IDENTITY"
+            echo "APPLE_API_KEY=$API_KEY"
+            echo "APPLE_API_ISSUER=$API_ISSUER"
+            echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/AuthKey.p8"
+            echo "MAC_SIGNED=1"
+          } >> "$GITHUB_ENV"
+
+      - name: Build
+        shell: bash
+        env:
+          NAME: ${{ matrix.name }}
+          BUNDLES: ${{ matrix.bundles }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          args=(--bundles "$BUNDLES")
+          if [ -n "$TARGET" ]; then
+            args+=(--target "$TARGET")
+          fi
+          # Apple's timestamp service sometimes does not answer while Tauri signs ("A timestamp
+          # was expected but was not found"); build again after a pause, only for that error.
+          for try in 1 2 3 4 5; do
+            if npx tauri build "${args[@]}" 2>&1 | tee "$RUNNER_TEMP/build.log"; then
+              break
+            fi
+            if [ "$NAME" != macos ] || [ "$try" = 5 ] || ! grep -qi timestamp "$RUNNER_TEMP/build.log"; then
+              exit 1
+            fi
+            echo "::warning::Signing failed at the timestamp (try $try), building again"
+            sleep $((try * 10))
+          done
+
+      - name: Collect the files
+        shell: bash
+        env:
+          NAME: ${{ matrix.name }}
+          TARGET: ${{ matrix.target }}
+          FILE_VERSION: ${{ inputs.file_version }}
+        run: |
+          version=${FILE_VERSION:-$(node -p "require('./package.json').version")}
+          bundle="target/${TARGET:+$TARGET/}release/bundle"
+          mkdir out
+          shopt -s nullglob
+          one() {
+            local files=("$1"/*"$2")
+            if [ ${#files[@]} != 1 ]; then
+              echo "::error::expected one $2 in $1, found ${#files[@]}"
+              exit 1
+            fi
+            cp "${files[0]}" "out/$3"
+          }
+          case "$NAME" in
+            linux)
+              one "$bundle/appimage" .AppImage "PsyBil-$version-x86_64.AppImage"
+              one "$bundle/deb" .deb "psybil_${version}_amd64.deb"
+              one "$bundle/rpm" .rpm "psybil-$version-1.x86_64.rpm"
+              ;;
+            windows)
+              one "$bundle/nsis" -setup.exe "PsyBil-Setup-$version.exe"
+              ;;
+            macos)
+              one "$bundle/dmg" .dmg "PsyBil-$version-macOS.dmg"
+              ;;
+          esac
+          ls -l out
+
+      # The installer installs and uninstalls without questions.
+      - name: Install the package (Windows)
+        if: matrix.name == 'windows'
+        shell: pwsh
+        run: |
+          $setup = Get-Item out/*.exe
+          $dir = "$env:RUNNER_TEMP\psybil-test"
+          $p = Start-Process $setup.FullName -ArgumentList "/S", "/D=$dir" -Wait -PassThru
+          if ($p.ExitCode) { throw "Installation: $($p.ExitCode)" }
+          if (-not (Test-Path "$dir\PsyBil.exe")) { throw "PsyBil.exe is missing after the installation" }
+      - name: Uninstall the package (Windows)
+        if: matrix.name == 'windows'
+        shell: pwsh
+        run: |
+          $u = Start-Process "$env:RUNNER_TEMP\psybil-test\uninstall.exe" -ArgumentList "/S" -Wait -PassThru
+          if ($u.ExitCode) { throw "Uninstall: $($u.ExitCode)" }
+
+      # One disk image for both kinds of Mac: the app holds both architectures.
+      - name: Check the architectures (macOS)
+        if: matrix.name == 'macos'
+        shell: bash
+        run: |
+          mnt=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" out/*.dmg
+          app="$mnt/PsyBil.app/Contents/MacOS/PsyBil"
+          lipo -archs "$app"
+          for arch in x86_64 arm64; do lipo -archs "$app" | grep -qw "$arch"; done
+          hdiutil detach "$mnt"
+
+      - name: Check the signature
+        if: matrix.name == 'macos' && env.MAC_SIGNED == '1'
+        shell: bash
+        run: |
+          dmg=$(ls out/*.dmg)
+          mnt=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$dmg"
+          codesign --verify --deep --strict --verbose=2 "$mnt/PsyBil.app"
+          spctl --assess --type execute --verbose=4 "$mnt/PsyBil.app"
+          xcrun stapler validate "$mnt/PsyBil.app"
+          hdiutil detach "$mnt"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pkg-${{ matrix.name }}
+          path: out/*
+          if-no-files-found: error

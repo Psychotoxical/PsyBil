@@ -1,0 +1,210 @@
+name: Channel
+
+# Moves a channel branch forward and builds a draft from it, nothing is published:
+#   next:    next takes over main (main must have a green ci-ok; a CI still running on main is
+#            waited for); draft prerelease vX.Y.Z-rc.N.
+#            If the version on main is already released, next gets the next patch number in
+#            every version file and [Unreleased] in CHANGELOG.md becomes its section
+#            (.github/release/bump_version.py). main itself catches up after the release
+#            (release-published.yml).
+#   release: release fast-forwards to next; draft vX.Y.Z
+#   direct:  both steps at once, without a release candidate: next takes over main as above,
+#            release fast-forwards to it in the same push; draft vX.Y.Z
+# CHANGELOG.md needs a section for X.Y.Z; that is checked before the channel branch moves.
+on:
+  workflow_call:
+    inputs:
+      channel:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+# one run at a time: "direct" moves next and release together
+concurrency:
+  group: channel
+
+jobs:
+  promote:
+    name: Move the branch
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      checks: read
+    outputs:
+      sha: ${{ steps.move.outputs.sha }}
+      version: ${{ steps.tag.outputs.version }}
+      tag: ${{ steps.tag.outputs.tag }}
+      file_version: ${{ steps.tag.outputs.file_version }}
+      title: ${{ steps.tag.outputs.title }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHANNEL: ${{ inputs.channel }}
+    steps:
+      - name: Check the channel
+        run: |
+          case "$CHANNEL" in
+            next|release|direct) ;;
+            *) echo "::error::Unknown channel $CHANNEL"; exit 1 ;;
+          esac
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Is main green?
+        if: inputs.channel != 'release'
+        timeout-minutes: 90
+        run: |
+          # right after a merge the CI of main is still running: wait for it instead of failing
+          sha=$(git rev-parse origin/main)
+          while :; do
+            runs=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs?check_name=ci-ok" \
+                   --jq '[.check_runs[] | .conclusion // "running"] | join(" ")')
+            case " $runs " in
+              *" success "*) echo "main ($sha): ci-ok is green"; break ;;
+              *" running "*|"  ") echo "main ($sha): waiting for ci-ok (${runs:-not started})"; sleep 30 ;;
+              *) echo "::error::main ($sha) has no green ci-ok: $runs"; exit 1 ;;
+            esac
+          done
+      - name: Put the branch together
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          has() { git ls-remote --exit-code --heads origin "$1" > /dev/null; }
+          if [ "$CHANNEL" = release ]; then
+            if has release; then
+              git checkout -q -B release origin/release
+              git merge --ff-only origin/next
+            else
+              git checkout -q -B release origin/next
+            fi
+            exit 0
+          fi
+          # next: the tree of main, as a merge on top of the old next so the push only moves forward
+          if has next; then
+            git checkout -q -B next origin/next
+            git merge -q --no-ff --no-commit -s ours origin/main || true
+            git read-tree -u --reset origin/main
+          else
+            git checkout -q -B next origin/main
+          fi
+          # a version that is already released gets the next patch number, in the app and the packages
+          published=$(gh release list --limit 200 --json tagName,isDraft \
+                      --jq '.[] | select(.isDraft | not) | .tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("v")')
+          # shellcheck disable=SC2086
+          version=$(python3 .github/release/bump_version.py next $published)
+          git add -u
+          if git rev-parse -q --verify MERGE_HEAD > /dev/null || ! git diff --cached --quiet; then
+            git commit -q -m "Version $version for the next channel"
+          fi
+          git log --oneline -3
+          # direct: release may only move forward to this state
+          if [ "$CHANNEL" = direct ] && has release && ! git merge-base --is-ancestor origin/release HEAD; then
+            echo "::error::release is not part of next; run next → release first"
+            exit 1
+          fi
+      - id: tag
+        name: Choose the tag
+        env:
+          APP: ${{ github.event.repository.name }}
+        run: |
+          version=$(python3 .github/release/bump_version.py get)
+          python3 .github/release/release_notes.py "$version" > /dev/null
+          releases=$(gh release list --limit 200 --json tagName,isDraft)
+          published=$(jq -r --arg t "v$version" '.[] | select(.tagName == $t and (.isDraft | not)) | .tagName' <<< "$releases")
+          if [ -n "$published" ]; then
+            echo "::error::v$version is already published"
+            exit 1
+          fi
+          if [ "$CHANNEL" = next ]; then
+            last=$( { git tag -l "v$version-rc.*"; jq -r '.[].tagName' <<< "$releases"; } \
+                    | sed -n "s/^v${version//./\\.}-rc\.\([0-9][0-9]*\)$/\1/p" | sort -n | tail -1)
+            n=$(( ${last:-0} + 1 ))
+            tag=v$version-rc.$n
+            {
+              echo "tag=$tag"
+              echo "title=$APP $version RC $n"
+              echo "prerelease=true"
+            } >> "$GITHUB_OUTPUT"
+          else
+            tag=v$version
+            {
+              echo "tag=$tag"
+              echo "title=$APP $version"
+              echo "prerelease=false"
+            } >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # the files carry the tag's version, so a release candidate's files say which one they are
+          echo "file_version=${tag#v}" >> "$GITHUB_OUTPUT"
+      - id: move
+        name: Push
+        run: |
+          if [ "$CHANNEL" = direct ]; then
+            git push --atomic origin HEAD:refs/heads/next HEAD:refs/heads/release
+          else
+            git push origin "HEAD:refs/heads/$CHANNEL"
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  packages:
+    name: Packages
+    needs: promote
+    uses: ./.github/workflows/packages.yml
+    with:
+      ref: ${{ needs.promote.outputs.sha }}
+      signed: true
+      file_version: ${{ needs.promote.outputs.file_version }}
+    secrets: inherit
+
+  draft:
+    name: Draft
+    needs: [promote, packages]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SHA: ${{ needs.promote.outputs.sha }}
+      VERSION: ${{ needs.promote.outputs.version }}
+      TAG: ${{ needs.promote.outputs.tag }}
+      FILE_VERSION: ${{ needs.promote.outputs.file_version }}
+      TITLE: ${{ needs.promote.outputs.title }}
+      PRERELEASE: ${{ needs.promote.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.promote.outputs.sha }}
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: pkg-*
+          path: ${{ runner.temp }}/packages  # not the repo's own assets/ folder
+          merge-multiple: true
+      - name: Create or update the draft
+        run: |
+          python3 .github/release/release_notes.py "$VERSION" "$FILE_VERSION" > notes.md
+          shopt -s nullglob
+          files=("$RUNNER_TEMP"/packages/*)
+          if [ ${#files[@]} = 0 ]; then
+            echo "::error::no package files"
+            exit 1
+          fi
+          ls -l "${files[@]}"
+          pre=()
+          if [ "$PRERELEASE" = true ]; then
+            pre=(--prerelease)
+          fi
+          if gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null | grep -q true; then
+            gh release edit "$TAG" --title "$TITLE" --notes-file notes.md --target "$SHA" "${pre[@]}"
+            # files of an earlier run under other names would stay next to the new ones
+            gh release view "$TAG" --json assets --jq '.assets[].name' | while read -r old; do
+              gh release delete-asset "$TAG" "$old" --yes
+            done
+            gh release upload "$TAG" "${files[@]}" --clobber
+            echo "::notice::Draft $TAG updated"
+          else
+            gh release create "$TAG" --draft "${pre[@]}" --title "$TITLE" --notes-file notes.md \
+              --target "$SHA" "${files[@]}"
+            echo "::notice::Draft $TAG created"
+          fi

@@ -1,9 +1,10 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setLanguage } from "../../i18n";
+import { i18n, setLanguage } from "../../i18n";
 import type { Invoice } from "../../ipc/bindings/Invoice";
 import { draftTotals, loadInvoice } from "../../ipc/invoices";
+import { issueTarget, issueText } from "../../ipc/issueTexts";
 import { createCustomer } from "../../ipc/masterdata";
 import { previewPng } from "../../ipc/pdf";
 import { useDraft } from "../../store/draft";
@@ -160,6 +161,14 @@ describe("Assistant", () => {
     useUi.setState({ route: { page: "assistant" }, toasts: [] });
   });
   afterEach(() => vi.useRealTimers());
+
+  it("issue_text_for_reversed_period", () => {
+    const t = (key: string, values?: Record<string, string>) => i18n.t(key, values);
+    expect(issueText({ type: "service_period_order" }, t)).toBe(
+      "Der Leistungszeitraum endet, bevor er beginnt.",
+    );
+    expect(issueTarget({ type: "service_period_order" })).toEqual({ step: 3 });
+  });
 
   it("footer_total_comes_from_core", async () => {
     render(<Assistant id="d1" />);

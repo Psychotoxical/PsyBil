@@ -9,6 +9,10 @@ export function DataPlaceSection() {
   const status = useWorkspace((s) => s.status);
   const { run, dialog, busy } = useChangePlace();
   const place = status?.place ?? { kind: "local" as const };
+  // While another computer holds the lock, this copy is not the newest state.
+  const readOnly = status?.access === "read_only";
+  const locked = busy || readOnly;
+  const describedBy = readOnly ? "data-place-locked" : undefined;
 
   const chooseShared = async () => {
     const dir = await pickFolder(t);
@@ -42,12 +46,20 @@ export function DataPlaceSection() {
               "In a shared folder several computers use the same data; while one writes, the others can read. Backups always stay on this computer.",
             )}
           </p>
+          {readOnly && (
+            <p className="field-hint" id="data-place-locked">
+              {t(
+                "While another computer is working with the data, the data folder cannot be changed.",
+              )}
+            </p>
+          )}
           <div className="settings-actions">
             {place.kind === "local" ? (
               <button
                 type="button"
                 className="btn"
-                disabled={busy}
+                disabled={locked}
+                aria-describedby={describedBy}
                 onClick={() => void chooseShared()}
               >
                 {t("Choose a shared folder…")}
@@ -57,7 +69,8 @@ export function DataPlaceSection() {
                 <button
                   type="button"
                   className="btn"
-                  disabled={busy}
+                  disabled={locked}
+                  aria-describedby={describedBy}
                   onClick={() => void chooseShared()}
                 >
                   {t("Choose another folder…")}
@@ -65,7 +78,8 @@ export function DataPlaceSection() {
                 <button
                   type="button"
                   className="btn"
-                  disabled={busy}
+                  disabled={locked}
+                  aria-describedby={describedBy}
                   onClick={() => void run({ kind: "local" })}
                 >
                   {t("Back to this computer only")}

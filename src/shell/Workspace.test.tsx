@@ -149,6 +149,22 @@ describe("workspace in the window", () => {
     expect(screen.queryByText(/issued_on_both_sides/)).toBeNull();
   });
 
+  it("merge_dialog_names_unreadable_date", async () => {
+    vi.mocked(quarantineEntries).mockResolvedValueOnce([
+      {
+        id: "q3",
+        kind: "legacy_invoice",
+        reason: "unreadable_date",
+        number: null,
+        business_id: null,
+      },
+    ]);
+    useWorkspace.getState().setReport({ ...REPORT, changed_both: [], quarantined: ["q3"] });
+    render(<MergeDialog />);
+    expect(await screen.findByText(/ein Datum war nicht lesbar/)).toBeInTheDocument();
+    expect(screen.queryByText(/unreadable_date/)).toBeNull();
+  });
+
   it("read_only_disables_new_invoice_and_save_with_reason", async () => {
     status({ access: "read_only", holder: HOLDER });
     render(

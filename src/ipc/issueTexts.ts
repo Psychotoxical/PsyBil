@@ -32,6 +32,8 @@ export function issueText(kind: IssueKind, t: T): string {
       return t("The customer needs a VAT ID for this kind of tax.");
     case "service_date":
       return t("The service date is missing.");
+    case "service_period_order":
+      return t("The service period ends before it starts.");
     case "exempt_reason":
       return t("Line {n} is tax exempt but gives no reason.", { n: String(kind.position) });
     case "tax_rate":
@@ -68,6 +70,7 @@ export function issueTarget(kind: IssueKind): IssueTarget {
     case "small_business_line":
       return { step: 2, row: kind.position - 1, col: "tax" };
     case "service_date":
+    case "service_period_order":
       return { step: 3 };
   }
 }
