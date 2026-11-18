@@ -1,0 +1,27 @@
+[package]
+name = "psybil-core"
+description = "PsyBil core: invoices, taxes, numbering and storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+rusqlite = { version = "0.43", features = ["bundled", "chrono", "serde_json"] }
+rust_decimal = { version = "1.43", features = ["macros"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+uuid = { version = "1.29", features = ["v4", "serde"] }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+dirs = "7"
+base64 = "0.23"
+krilla = "0.8.2"
+rustybuzz = "0.20.1"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+
+[dev-dependencies]
+tempfile = "3.27"
+pdf-extract = "0.12.1"
+lopdf = "0.42"
