@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-archive-brand"
+description = "Enables the archive_brand command without any pre-configured scope."
+commands.allow = ["archive_brand"]
+
+[[permission]]
+identifier = "deny-archive-brand"
+description = "Denies the archive_brand command without any pre-configured scope."
+commands.deny = ["archive_brand"]

@@ -23,6 +23,7 @@ pub const DEFAULT_NUMBER_TEMPLATE: &str = "{PREFIX}-{YYYY}-{NNNN}";
 
 /// Editable fields of a business.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct NewBusiness {
     pub name: String,
     pub street: String,
@@ -36,6 +37,7 @@ pub struct NewBusiness {
     pub currency: String,
     pub number_template: String,
     pub storno_prefix: String,
+    #[cfg_attr(test, ts(type = "Array<string>"))]
     pub tax_rates: Vec<Decimal>,
 }
 
@@ -61,6 +63,7 @@ impl Default for NewBusiness {
 
 /// A business: the person or company that owes the taxes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Business {
     pub id: Uuid,
     pub name: String,
@@ -75,6 +78,7 @@ pub struct Business {
     pub currency: String,
     pub number_template: String,
     pub storno_prefix: String,
+    #[cfg_attr(test, ts(type = "Array<string>"))]
     pub tax_rates: Vec<Decimal>,
     pub archived: bool,
 }
@@ -249,6 +253,7 @@ pub fn delete_business(tx: &Transaction, clock: &dyn Clock, id: Uuid) -> Result<
 
 /// Editable fields of a brand.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct NewBrand {
     pub business_id: Uuid,
     pub name: String,
@@ -296,6 +301,7 @@ impl Default for NewBrand {
 
 /// A brand: how a business appears on its invoices.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Brand {
     pub id: Uuid,
     pub business_id: Uuid,
@@ -484,6 +490,7 @@ pub fn delete_brand(tx: &Transaction, clock: &dyn Clock, id: Uuid) -> Result<()>
 /// Whether a customer is a private person or a business.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum CustomerKind {
     Private,
     Business,
@@ -511,6 +518,7 @@ impl CustomerKind {
 
 /// Editable fields of a customer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct NewCustomer {
     pub name: String,
     pub street: String,
@@ -544,6 +552,7 @@ impl Default for NewCustomer {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Customer {
     pub id: Uuid,
     pub name: String,
@@ -705,6 +714,7 @@ pub fn delete_customer(tx: &Transaction, clock: &dyn Clock, id: Uuid) -> Result<
 /// Goods have stock; services do not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum ProductKind {
     Goods,
     Service,
@@ -729,20 +739,24 @@ impl ProductKind {
 
 /// Editable fields of a catalog product.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct NewProduct {
     pub brand_id: Uuid,
     pub name: String,
     pub description: String,
     pub kind: ProductKind,
     pub unit: String,
+    #[cfg_attr(test, ts(type = "string"))]
     pub price: Decimal,
     pub price_mode: PriceMode,
     pub tax: TaxChoice,
+    #[cfg_attr(test, ts(type = "string | null"))]
     pub stock: Option<Decimal>,
     pub active: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Product {
     pub id: Uuid,
     pub brand_id: Uuid,
@@ -750,9 +764,11 @@ pub struct Product {
     pub description: String,
     pub kind: ProductKind,
     pub unit: String,
+    #[cfg_attr(test, ts(type = "string"))]
     pub price: Decimal,
     pub price_mode: PriceMode,
     pub tax: TaxChoice,
+    #[cfg_attr(test, ts(type = "string | null"))]
     pub stock: Option<Decimal>,
     pub active: bool,
 }

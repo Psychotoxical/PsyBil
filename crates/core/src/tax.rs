@@ -6,9 +6,13 @@ use serde::{Deserialize, Serialize};
 /// How a line is taxed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum TaxCategory {
     /// Regular VAT at the given rate in percent (e.g. 19 or 7).
-    Standard { rate: Decimal },
+    Standard {
+        #[cfg_attr(test, ts(type = "string"))]
+        rate: Decimal,
+    },
     /// Tax-exempt; the reason is printed on the invoice.
     Exempt { reason: String },
     /// Small business, no VAT shown (§ 19 UStG).
@@ -55,6 +59,7 @@ impl TaxCategory {
 /// the same invoice (used for shipping as an ancillary service).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", content = "category", rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum TaxChoice {
     Fixed(TaxCategory),
     FollowGoods,

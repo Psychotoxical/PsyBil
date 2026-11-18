@@ -33,6 +33,7 @@ pub enum CalcError {
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, type = "number"))]
 pub struct Cents(pub i64);
 
 impl Cents {

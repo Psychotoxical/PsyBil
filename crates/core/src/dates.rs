@@ -60,6 +60,7 @@ pub fn due_date(invoice_date: NaiveDate, payment_days: u32) -> NaiveDate {
 /// When the goods were delivered or the service was performed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum ServiceDate {
     /// Printed as "service date equals invoice date".
     SameAsInvoice,

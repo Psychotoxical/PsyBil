@@ -9,6 +9,7 @@ pub(crate) mod layout;
 pub(crate) mod locale;
 pub(crate) mod logo;
 pub mod model;
+pub mod preview;
 pub(crate) mod render;
 
 pub use archive::invoice_pdf;

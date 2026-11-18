@@ -53,22 +53,59 @@ pub fn allocate_number(
             |r| r.get(0),
         )
         .map_err(crate::db::not_found)?;
-    let mut n = counter(tx, business_id, year)?.unwrap_or(1);
+    let (candidate, n) = first_free(tx, business_id, &template, prefix, year)?;
+    let next = n
+        .checked_add(1)
+        .ok_or(Error::CounterTooLow { existing: u32::MAX })?;
+    store_counter(tx, business_id, year, next)?;
+    Ok(candidate)
+}
+
+/// The first number of the business for `year` that is not taken yet,
+/// with its counter value.
+fn first_free(
+    conn: &Connection,
+    business_id: Uuid,
+    template: &str,
+    prefix: &str,
+    year: i32,
+) -> Result<(String, u32)> {
+    let mut n = counter(conn, business_id, year)?.unwrap_or(1);
     loop {
-        let candidate = format_number(&template, prefix, year, n);
-        let taken: bool = tx.query_row(
+        let candidate = format_number(template, prefix, year, n);
+        let taken: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM invoices WHERE business_id = ?1 AND number = ?2)",
             params![business_id.to_string(), candidate],
             |r| r.get(0),
         )?;
+        if !taken {
+            return Ok((candidate, n));
+        }
         n = n
             .checked_add(1)
             .ok_or(Error::CounterTooLow { existing: u32::MAX })?;
-        if !taken {
-            store_counter(tx, business_id, year, n)?;
-            return Ok(candidate);
-        }
     }
+}
+
+/// The number `issue_invoice` would give invoice `invoice_id` now, without
+/// taking it.
+pub fn peek_number(conn: &Connection, invoice_id: Uuid) -> Result<String> {
+    use chrono::Datelike;
+    let invoice = crate::invoice::load_invoice(conn, invoice_id)?;
+    let business = crate::masterdata::get_business(conn, invoice.business_id)?;
+    let brand = crate::masterdata::get_brand(conn, invoice.brand_id)?;
+    let prefix = match invoice.kind {
+        crate::invoice::InvoiceKind::Invoice => brand.invoice_prefix,
+        crate::invoice::InvoiceKind::Storno => business.storno_prefix,
+    };
+    let (candidate, _) = first_free(
+        conn,
+        business.id,
+        &business.number_template,
+        &prefix,
+        invoice.invoice_date.year(),
+    )?;
+    Ok(candidate)
 }
 
 /// Sets the next number for a year, for continuing an existing sequence.

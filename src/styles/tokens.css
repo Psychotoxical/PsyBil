@@ -1,0 +1,81 @@
+/* Psy design language: Catppuccin Mocha (dark) and Latte (light), accent always Mauve.
+   Values from psytags/ui/theme.py. */
+
+:root,
+[data-theme="mocha"] {
+  color-scheme: dark;
+  --bg-app: #1e1e2e;
+  --bg-chrome: #181825;
+  --bg-panel: #181825;
+  --bg-field: #11111b;
+  --bg-button: #313244;
+  --bg-hover: #45475a;
+  --border: #45475a;
+  --border-field: #585b70;
+  --row-alt: #232334;
+  --text: #cdd6f4;
+  --text-secondary: #a6adc8;
+  --text-disabled: #7f849c;
+  --accent: #cba6f7;
+  --accent-hover: #dfc8fb;
+  --accent-text: #1e1e2e;
+  --selection: #45385c;
+  --error: #f38ba8;
+  --warning: #f9e2af;
+  --warning-bg: #4a4030;
+  --ok-bg: #2a3b32;
+  --ok-text: #a6e3a1;
+  --bad-bg: #4b2c36;
+  --bad-text: #fbb4c6;
+  --paper: #ffffff;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.35), 0 8px 24px rgb(0 0 0 / 0.3);
+}
+
+[data-theme="latte"] {
+  color-scheme: light;
+  --bg-app: #eff1f5;
+  --bg-chrome: #e6e9ef;
+  --bg-panel: #e6e9ef;
+  --bg-field: #dce0e8;
+  --bg-button: #ccd0da;
+  --bg-hover: #bcc0cc;
+  --border: #bcc0cc;
+  --border-field: #acb0be;
+  --row-alt: #e9ecf1;
+  --text: #4c4f69;
+  --text-secondary: #5c5f77;
+  --text-disabled: #8c8fa1;
+  --accent: #8839ef;
+  --accent-hover: #7a2fd8;
+  --accent-text: #eff1f5;
+  --selection: #d8c9f4;
+  --error: #d20f39;
+  --warning: #df8e1d;
+  --warning-bg: #f6e6c8;
+  --ok-bg: #cfe9cc;
+  --ok-text: #2b6e1c;
+  --bad-bg: #f6ccd6;
+  --bad-text: #9c0b2b;
+  --paper: #ffffff;
+  --shadow: 0 1px 2px rgb(76 79 105 / 0.12), 0 8px 24px rgb(76 79 105 / 0.14);
+}
+
+:root {
+  --font-body: "Inter Variable", system-ui, sans-serif;
+  --font-head: "Space Grotesk Variable", "Inter Variable", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+  --radius: 6px;
+  --radius-lg: 10px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --sidebar: 220px;
+  --sidebar-collapsed: 64px;
+  /* 400 px from a wide window on; narrower windows keep room for the line grid. */
+  --panel: clamp(300px, 27vw, 400px);
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+}

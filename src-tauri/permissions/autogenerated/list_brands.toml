@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-brands"
+description = "Enables the list_brands command without any pre-configured scope."
+commands.allow = ["list_brands"]
+
+[[permission]]
+identifier = "deny-list-brands"
+description = "Denies the list_brands command without any pre-configured scope."
+commands.deny = ["list_brands"]

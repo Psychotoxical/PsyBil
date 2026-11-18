@@ -13,6 +13,7 @@ use crate::tax::{TaxCategory, TaxChoice};
 /// Whether unit prices on an invoice are net or gross.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum PriceMode {
     Net,
     Gross,
@@ -38,6 +39,7 @@ impl PriceMode {
 /// What a line represents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum LineKind {
     Item,
     Free,
@@ -62,6 +64,7 @@ pub struct LineInput {
 
 /// Sum of all lines in one tax category.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct TaxGroup {
     pub category: TaxCategory,
     pub base: Cents,
@@ -71,6 +74,7 @@ pub struct TaxGroup {
 
 /// Result of `calculate`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Totals {
     /// Rounded amount of each line, net or gross as the price mode says.
     pub line_amounts: Vec<Cents>,

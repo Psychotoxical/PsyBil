@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-payments"
+description = "Enables the list_payments command without any pre-configured scope."
+commands.allow = ["list_payments"]
+
+[[permission]]
+identifier = "deny-list-payments"
+description = "Denies the list_payments command without any pre-configured scope."
+commands.deny = ["list_payments"]
