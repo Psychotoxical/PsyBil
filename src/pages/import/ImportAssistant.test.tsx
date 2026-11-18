@@ -80,6 +80,7 @@ vi.mock("../../ipc/legacy", () => ({
     quarantined: 0,
     needs_review: 1,
     already_present: 0,
+    set_aside: [],
   })),
   cancelImport: vi.fn(async () => {}),
 }));
@@ -189,6 +190,28 @@ describe("ImportAssistant", () => {
     expect(
       screen.getByText("An item without a product was kept as a free line."),
     ).toBeInTheDocument();
+  });
+
+  it("report_names_each_invoice_kept_aside", async () => {
+    vi.mocked(applyImport).mockResolvedValueOnce({
+      businesses: 2,
+      customers: 1,
+      products: 0,
+      drafts: 1,
+      issued: 0,
+      payments: 0,
+      quarantined: 1,
+      needs_review: 0,
+      already_present: 0,
+      set_aside: [{ number: "RE-2026-0002", reason: "unreadable_date" }],
+    });
+    const user = userEvent.setup();
+    await toSenders(user);
+    await answerSmallBusiness(user);
+    for (let i = 0; i < 3; i += 1) await user.click(screen.getByRole("button", { name: "Weiter" }));
+    await user.click(screen.getByRole("button", { name: "Übernehmen" }));
+    expect(await screen.findByText("Übernommen")).toBeInTheDocument();
+    expect(screen.getByText("RE-2026-0002: ein Datum war nicht lesbar")).toBeInTheDocument();
   });
 
   it("welcome_offers_import_when_legacy_found", async () => {

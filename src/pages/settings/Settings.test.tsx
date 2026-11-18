@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import pkg from "../../../package.json";
 import { App } from "../../App";
 import { setLanguage } from "../../i18n";
 import { saveSettings } from "../../ipc/settings";
@@ -54,7 +55,8 @@ describe("Settings", () => {
 
   it("about_shows_version_and_font_licence", () => {
     render(<App />);
-    expect(screen.getByText(/0\.1\.0/)).toBeInTheDocument();
+    // The release run raises the version in package.json; the window shows it.
+    expect(screen.getByText(pkg.version)).toBeInTheDocument();
     expect(screen.getByText(/SIL Open Font License/)).toBeInTheDocument();
   });
 });

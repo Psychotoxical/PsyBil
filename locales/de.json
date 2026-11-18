@@ -575,5 +575,8 @@
   "1 could not be placed and is kept aside": "1 ließ sich nicht einordnen und liegt beiseite",
   "1 invoice: {placement}": "1 Rechnung: {placement}",
   "Customer “{name}”: use the one in PsyBil": "Kunde „{name}“: den aus PsyBil nehmen",
-  "Item “{name}”: use the one in PsyBil": "Artikel „{name}“: den aus PsyBil nehmen"
+  "Item “{name}”: use the one in PsyBil": "Artikel „{name}“: den aus PsyBil nehmen",
+  "The service period ends before it starts.": "Der Leistungszeitraum endet, bevor er beginnt.",
+  "a date could not be read": "ein Datum war nicht lesbar",
+  "While another computer is working with the data, the data folder cannot be changed.": "Solange ein anderer Rechner mit den Daten arbeitet, lässt sich der Datenordner nicht ändern."
 }

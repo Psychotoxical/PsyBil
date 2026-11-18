@@ -1,0 +1,66 @@
+name: Bug report
+description: Something does not work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. Please describe the case with made-up names and amounts: never attach a real invoice, customer data, bank details or your database.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: |
+        1. Created an invoice for "Kunde A" with two lines
+        2. Added a partial payment of €50.00
+        3. Expected the status "partly paid", but ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: PsyBil version
+      description: Shown under Settings → About PsyBil.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: system
+    attributes:
+      label: System
+      options:
+        - Windows 11
+        - Windows 10
+        - Linux (AppImage)
+        - Linux (deb)
+        - Linux (rpm)
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Built from source
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: place
+    attributes:
+      label: Data folder
+      description: Settings → Data folder.
+      options:
+        - On this computer only
+        - Shared folder
+        - Demo mode
+  - type: textarea
+    id: log
+    attributes:
+      label: Error message or screenshot
+      description: Paste error messages as text if possible. Screenshots can be dragged in; please hide real names and amounts first.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before sending
+      options:
+        - label: I searched the existing issues.
+          required: true
+        - label: The report contains no real customer data, bank details or personal paths.
+          required: true

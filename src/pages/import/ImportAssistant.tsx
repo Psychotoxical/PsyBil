@@ -330,6 +330,12 @@ function ReportView({ report, warnings }: { report: ImportReport; warnings: stri
         "{n} could not be placed and are kept aside",
       ),
     );
+  // each one by number, so it can be found and entered by hand
+  const reasons: Record<string, string> = {
+    number_collision: t("number used twice"),
+    unreadable_date: t("a date could not be read"),
+  };
+  for (const s of report.set_aside) lines.push(`${s.number}: ${reasons[s.reason] ?? s.reason}`);
   return (
     <section className="import-step">
       <h2 className="import-question">

@@ -604,6 +604,11 @@ impl Workspace {
     /// Moves the data to another place. The target must not hold a PsyBil
     /// database yet; on any error this workspace stays as it was.
     pub fn relocate(&mut self, target: Location, user: &str, clock: &dyn Clock) -> Result<()> {
+        // A read-only copy is not the newest state: moving it would split the
+        // data while the other computer keeps writing to the shared folder.
+        if !matches!(self.access, Access::ReadWrite) {
+            return Err(Error::ReadOnly);
+        }
         let (file, lock_dir) = match &target {
             Location::Local { file } => (file.clone(), None),
             Location::Shared { dir, .. } => {
@@ -1086,6 +1091,25 @@ mod tests {
         let c =
             Workspace::open_or_read(loc(&s, &cache_c), s.mac.clone(), "nutzer", &s.clock).unwrap();
         assert!(matches!(c.access(), Access::ReadOnly { stale: false, .. }));
+    }
+
+    #[test]
+    fn relocate_refused_while_read_only() {
+        let s = shared();
+        let mut a = Workspace::open(loc(&s, &s.cache_a), s.pc.clone(), "nutzer", &s.clock).unwrap();
+        add_customer(&mut a, &s.clock, "Kunde A");
+        a.sync(&s.clock).unwrap();
+        let mut b = Workspace::open_or_read(loc(&s, &s.cache_b), s.mac.clone(), "nutzer", &s.clock)
+            .unwrap();
+        let file = s._root.path().join("moved.psybil");
+        assert!(matches!(
+            b.relocate(Location::Local { file: file.clone() }, "nutzer", &s.clock),
+            Err(Error::ReadOnly)
+        ));
+        // Nothing moved: the target stays empty and the copy stays read-only.
+        assert!(!file.exists());
+        assert_eq!(b.location(), &loc(&s, &s.cache_b));
+        assert!(matches!(b.access(), Access::ReadOnly { .. }));
     }
 
     #[test]
