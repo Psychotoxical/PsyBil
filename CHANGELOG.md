@@ -4,6 +4,8 @@ Every version has its own section. The section of a version becomes the text of 
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-18
+
 ### Added
 
 - Invoices for one or more businesses, each with its own brands (logo, colour, PDF template) and gap-free numbers per year.
@@ -18,3 +20,4 @@ Every version has its own section. The section of a version becomes the text of 
 - A shared data folder, for example in Nextcloud: one computer writes, the others read, and changes made on both sides are merged.
 - Taking over data from VibeBill, checked invoice by invoice; the old file is only read.
 - English and German, light and dark, keyboard use throughout, and help by task (F1).
+
