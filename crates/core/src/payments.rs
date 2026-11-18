@@ -128,6 +128,7 @@ pub fn delete_payment(tx: &Transaction, clock: &dyn Clock, id: Uuid) -> Result<(
         return Err(Error::PaymentTransferred);
     }
     tx.execute("DELETE FROM payments WHERE id = ?1", [id.to_string()])?;
+    crate::tombstone::mark_deleted(tx, clock, "payments", id)?;
     audit::log(
         tx,
         clock,
@@ -142,6 +143,7 @@ pub fn delete_payment(tx: &Transaction, clock: &dyn Clock, id: Uuid) -> Result<(
             "DELETE FROM payments WHERE id = ?1",
             [original_id.to_string()],
         )?;
+        crate::tombstone::mark_deleted(tx, clock, "payments", original_id)?;
         audit::log(
             tx,
             clock,
@@ -201,7 +203,7 @@ pub fn invoice_status(conn: &Connection, id: Uuid, today: NaiveDate) -> Result<I
     if invoice.state == InvoiceState::Draft {
         return Ok(settled(StatusKind::Draft));
     }
-    if invoice.cancelled_by_id.is_some() {
+    if invoice.cancelled_by_id.is_some() || invoice.legacy_cancelled {
         return Ok(settled(StatusKind::Cancelled));
     }
     if invoice.kind == InvoiceKind::Storno {

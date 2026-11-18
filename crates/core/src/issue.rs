@@ -116,47 +116,12 @@ pub fn issue_invoice(
     };
 
     let brand = get_brand(tx, invoice.brand_id)?;
-    let customer = invoice
-        .customer_id
-        .map(|c| get_customer(tx, c))
-        .transpose()?;
     let prefix = match invoice.kind {
         InvoiceKind::Invoice => brand.invoice_prefix.as_str(),
         InvoiceKind::Storno => business.storno_prefix.as_str(),
     };
     let number = allocate_number(tx, business.id, prefix, invoice.invoice_date.year())?;
-    let cancels = invoice
-        .cancels_id
-        .map(|original| {
-            tx.query_row(
-                "SELECT number, invoice_date FROM invoices WHERE id = ?1",
-                [original.to_string()],
-                |r| Ok(serde_json::json!({ "number": r.get::<_, String>(0)?, "invoice_date": r.get::<_, String>(1)? })),
-            )
-            .optional()
-        })
-        .transpose()?
-        .flatten();
-
-    let snapshot = serde_json::json!({
-        "number": number,
-        "kind": invoice.kind,
-        "invoice_date": invoice.invoice_date,
-        "service_date": invoice.service_date,
-        "due_date": invoice.due_date,
-        "currency": invoice.currency,
-        "language": invoice.language,
-        "price_mode": invoice.price_mode,
-        "pdf_template": brand.pdf_template,
-        "business": business,
-        "brand": brand,
-        "logo_sha256": brand.logo.as_deref().map(sha256_hex),
-        "customer": customer,
-        "lines": invoice.lines,
-        "totals": totals,
-        "texts": { "intro": invoice.intro_text, "outro": invoice.outro_text, "notes": invoice.notes },
-        "cancels": cancels,
-    });
+    let snapshot = build_snapshot(tx, &invoice, &number, &totals, false)?;
 
     let now = timestamp(clock);
     tx.execute(
@@ -186,12 +151,9 @@ pub fn issue_invoice(
         let (ProductKind::Goods, Some(stock)) = (product.kind, product.stock) else {
             continue;
         };
+        // Only the booking is written; the effective stock is base + bookings.
         let delta: Decimal = -line.quantity;
         let new_stock = stock + delta;
-        tx.execute(
-            "UPDATE products SET stock = ?2, updated_at = ?3 WHERE id = ?1",
-            params![product_id.to_string(), new_stock.to_string(), now],
-        )?;
         tx.execute(
             "INSERT INTO stock_moves (id, product_id, invoice_id, delta, at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![Uuid::new_v4().to_string(), product_id.to_string(), id.to_string(), delta.to_string(), now],
@@ -232,6 +194,55 @@ pub fn issue_invoice(
         totals,
         negative_stock,
     })
+}
+
+/// The frozen picture of an invoice: master data, lines, totals and texts as
+/// they are now. `imported` marks invoices taken over from VibeBill.
+pub(crate) fn build_snapshot(
+    tx: &Transaction,
+    invoice: &Invoice,
+    number: &str,
+    totals: &Totals,
+    imported: bool,
+) -> Result<serde_json::Value> {
+    let business = get_business(tx, invoice.business_id)?;
+    let brand = get_brand(tx, invoice.brand_id)?;
+    let customer = invoice
+        .customer_id
+        .map(|c| get_customer(tx, c))
+        .transpose()?;
+    let cancels = invoice
+        .cancels_id
+        .map(|original| {
+            tx.query_row(
+                "SELECT number, invoice_date FROM invoices WHERE id = ?1",
+                [original.to_string()],
+                |r| Ok(serde_json::json!({ "number": r.get::<_, String>(0)?, "invoice_date": r.get::<_, String>(1)? })),
+            )
+            .optional()
+        })
+        .transpose()?
+        .flatten();
+    Ok(serde_json::json!({
+        "number": number,
+        "kind": invoice.kind,
+        "invoice_date": invoice.invoice_date,
+        "service_date": invoice.service_date,
+        "due_date": invoice.due_date,
+        "currency": invoice.currency,
+        "language": invoice.language,
+        "price_mode": invoice.price_mode,
+        "pdf_template": brand.pdf_template,
+        "business": business,
+        "brand": brand,
+        "logo_sha256": brand.logo.as_deref().map(sha256_hex),
+        "customer": customer,
+        "lines": invoice.lines,
+        "totals": totals,
+        "texts": { "intro": invoice.intro_text, "outro": invoice.outro_text, "notes": invoice.notes },
+        "cancels": cancels,
+        "imported": imported,
+    }))
 }
 
 /// Sets every line of a small-business invoice to the § 19 category, so the

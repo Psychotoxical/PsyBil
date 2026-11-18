@@ -99,12 +99,14 @@ pub struct Invoice {
     pub replaces_id: Option<Uuid>,
     pub imported: bool,
     pub needs_review: bool,
+    /// Taken over from VibeBill as cancelled, without a cancellation document.
+    pub legacy_cancelled: bool,
 }
 
 const INVOICE_COLS: &str = "id, business_id, brand_id, customer_id, kind, state, number, \
     invoice_date, service_date, payment_days, due_date, price_mode, currency, language, \
     intro_text, outro_text, notes, net_cents, tax_cents, gross_cents, cancels_id, \
-    cancelled_by_id, replaces_id, imported, needs_review";
+    cancelled_by_id, replaces_id, imported, needs_review, legacy_cancelled";
 
 fn invoice_from_row(r: &Row) -> rusqlite::Result<Invoice> {
     let kind: String = r.get(4)?;
@@ -151,6 +153,7 @@ fn invoice_from_row(r: &Row) -> rusqlite::Result<Invoice> {
         replaces_id: opt_uuid_col(r, 22)?,
         imported: r.get(23)?,
         needs_review: r.get(24)?,
+        legacy_cancelled: r.get(25)?,
     })
 }
 
@@ -283,10 +286,10 @@ pub fn save_draft(tx: &Transaction, clock: &dyn Clock, id: Uuid, input: DraftInp
 }
 
 /// Deletes a draft. Issued invoices can never be deleted.
-pub fn delete_draft(tx: &Transaction, id: Uuid) -> Result<()> {
+pub fn delete_draft(tx: &Transaction, clock: &dyn Clock, id: Uuid) -> Result<()> {
     require_draft(tx, id)?;
     tx.execute("DELETE FROM invoices WHERE id = ?1", [id.to_string()])?;
-    Ok(())
+    crate::tombstone::mark_deleted(tx, clock, "invoices", id)
 }
 
 fn require_draft(conn: &Connection, id: Uuid) -> Result<()> {
@@ -447,7 +450,7 @@ mod tests {
             db.write(|tx| save_draft(tx, &clock(), id, sample_draft(brand_id, Some(customer_id))));
         assert!(matches!(result, Err(Error::NotDraft)));
         assert!(matches!(
-            db.write(|tx| delete_draft(tx, id)),
+            db.write(|tx| delete_draft(tx, &clock(), id)),
             Err(Error::NotDraft)
         ));
     }
@@ -458,7 +461,7 @@ mod tests {
         let id = db
             .write(|tx| create_draft(tx, &clock(), sample_draft(brand_id, Some(customer_id))))
             .unwrap();
-        db.write(|tx| delete_draft(tx, id)).unwrap();
+        db.write(|tx| delete_draft(tx, &clock(), id)).unwrap();
         assert!(matches!(load_invoice(db.read(), id), Err(Error::NotFound)));
     }
 

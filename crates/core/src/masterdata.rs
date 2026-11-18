@@ -14,6 +14,7 @@ use crate::db::{
     UnknownValue, dec_col, json_col, not_found, opt_dec_col, price_mode_col, uuid_col,
 };
 use crate::tax::TaxChoice;
+use crate::tombstone::{delete_drafts_where, mark_deleted};
 use crate::{Error, Result};
 
 pub const DEFAULT_NUMBER_TEMPLATE: &str = "{PREFIX}-{YYYY}-{NNNN}";
@@ -231,10 +232,7 @@ pub fn delete_business(tx: &Transaction, clock: &dyn Clock, id: Uuid) -> Result<
     )? {
         return Err(Error::InUseByIssuedInvoice);
     }
-    tx.execute(
-        "DELETE FROM invoices WHERE business_id = ?1",
-        [id.to_string()],
-    )?;
+    delete_drafts_where(tx, clock, "business_id", id)?;
     for brand in list_brands(tx, id)? {
         delete_brand(tx, clock, brand.id)?;
     }
@@ -243,6 +241,7 @@ pub fn delete_business(tx: &Transaction, clock: &dyn Clock, id: Uuid) -> Result<
         [id.to_string()],
     )?;
     tx.execute("DELETE FROM businesses WHERE id = ?1", [id.to_string()])?;
+    mark_deleted(tx, clock, "businesses", id)?;
     audit::log(tx, clock, "business", id, "delete", serde_json::Value::Null)
 }
 
@@ -471,11 +470,12 @@ pub fn delete_brand(tx: &Transaction, clock: &dyn Clock, id: Uuid) -> Result<()>
     )? {
         return Err(Error::InUseByIssuedInvoice);
     }
-    tx.execute("DELETE FROM invoices WHERE brand_id = ?1", [id.to_string()])?;
+    delete_drafts_where(tx, clock, "brand_id", id)?;
     for product in list_products(tx, id, true)? {
         delete_product(tx, clock, product.id)?;
     }
     tx.execute("DELETE FROM brands WHERE id = ?1", [id.to_string()])?;
+    mark_deleted(tx, clock, "brands", id)?;
     audit::log(tx, clock, "brand", id, "delete", serde_json::Value::Null)
 }
 
@@ -694,11 +694,9 @@ pub fn delete_customer(tx: &Transaction, clock: &dyn Clock, id: Uuid) -> Result<
     )? {
         return Err(Error::InUseByIssuedInvoice);
     }
-    tx.execute(
-        "DELETE FROM invoices WHERE customer_id = ?1",
-        [id.to_string()],
-    )?;
+    delete_drafts_where(tx, clock, "customer_id", id)?;
     tx.execute("DELETE FROM customers WHERE id = ?1", [id.to_string()])?;
+    mark_deleted(tx, clock, "customers", id)?;
     audit::log(tx, clock, "customer", id, "delete", serde_json::Value::Null)
 }
 
@@ -811,13 +809,51 @@ pub fn create_product(tx: &Transaction, clock: &dyn Clock, input: NewProduct) ->
     Ok(id)
 }
 
+/// Sum of all stock bookings of a product.
+pub(crate) fn booked_stock(conn: &Connection, product_id: Uuid) -> Result<Decimal> {
+    let mut stmt = conn.prepare("SELECT delta FROM stock_moves WHERE product_id = ?1")?;
+    let deltas = stmt.query_map([product_id.to_string()], |r| dec_col(r, 0))?;
+    let mut sum = Decimal::ZERO;
+    for delta in deltas {
+        sum += delta?;
+    }
+    Ok(sum)
+}
+
+/// Turns the stored base stock into the effective stock (base + bookings).
+fn with_effective_stock(conn: &Connection, mut product: Product) -> Result<Product> {
+    if let Some(base) = product.stock {
+        product.stock = Some(base + booked_stock(conn, product.id)?);
+    }
+    Ok(product)
+}
+
+/// Schema v2 data step: stock used to include the bookings; from v2 on the
+/// stored value is the base and the bookings are added on reading.
+pub(crate) fn rebase_stock_v2(tx: &Transaction) -> Result<()> {
+    let mut stmt = tx.prepare("SELECT id, stock FROM products WHERE stock IS NOT NULL")?;
+    let rows = stmt
+        .query_map([], |r| Ok((uuid_col(r, 0)?, dec_col(r, 1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (id, stock) in rows {
+        let base = stock - booked_stock(tx, id)?;
+        tx.execute(
+            "UPDATE products SET stock = ?2 WHERE id = ?1",
+            params![id.to_string(), base.to_string()],
+        )?;
+    }
+    Ok(())
+}
+
 pub fn get_product(conn: &Connection, id: Uuid) -> Result<Product> {
-    conn.query_row(
-        &format!("SELECT {PRODUCT_COLS} FROM products WHERE id = ?1"),
-        [id.to_string()],
-        product_from_row,
-    )
-    .map_err(not_found)
+    let product = conn
+        .query_row(
+            &format!("SELECT {PRODUCT_COLS} FROM products WHERE id = ?1"),
+            [id.to_string()],
+            product_from_row,
+        )
+        .map_err(not_found)?;
+    with_effective_stock(conn, product)
 }
 
 pub fn list_products(
@@ -829,14 +865,23 @@ pub fn list_products(
         "SELECT {PRODUCT_COLS} FROM products WHERE brand_id = ?1 AND (active = 1 OR ?2)
          ORDER BY name COLLATE NOCASE"
     ))?;
-    let rows = stmt.query_map(
-        params![brand_id.to_string(), include_inactive],
-        product_from_row,
-    )?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
+    let rows = stmt
+        .query_map(
+            params![brand_id.to_string(), include_inactive],
+            product_from_row,
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(|p| with_effective_stock(conn, p))
+        .collect()
 }
 
+/// Saves a product. `product.stock` is the wanted effective stock; the base
+/// is derived from it so the bookings stay intact.
 pub fn update_product(tx: &Transaction, clock: &dyn Clock, product: &Product) -> Result<()> {
+    let old = get_product(tx, product.id)?;
+    let booked = booked_stock(tx, product.id)?;
+    let base = product.stock.map(|s| s - booked);
     let changed = tx.execute(
         "UPDATE products SET brand_id = ?2, name = ?3, description = ?4, kind = ?5, unit = ?6,
             price = ?7, price_mode = ?8, tax = ?9, stock = ?10, active = ?11, updated_at = ?12
@@ -851,7 +896,7 @@ pub fn update_product(tx: &Transaction, clock: &dyn Clock, product: &Product) ->
             product.price.to_string(),
             product.price_mode.as_str(),
             serde_json::to_string(&product.tax)?,
-            product.stock.map(|s| s.to_string()),
+            base.map(|s| s.to_string()),
             product.active,
             timestamp(clock),
         ],
@@ -859,6 +904,14 @@ pub fn update_product(tx: &Transaction, clock: &dyn Clock, product: &Product) ->
     if changed == 0 {
         return Err(Error::NotFound);
     }
+    audit::log(
+        tx,
+        clock,
+        "product",
+        product.id,
+        "update",
+        serde_json::json!({ "old": old, "new": product }),
+    )?;
     Ok(())
 }
 
@@ -876,6 +929,7 @@ pub fn delete_product(tx: &Transaction, clock: &dyn Clock, id: Uuid) -> Result<(
         return Err(Error::InUseByIssuedInvoice);
     }
     tx.execute("DELETE FROM products WHERE id = ?1", [id.to_string()])?;
+    mark_deleted(tx, clock, "products", id)?;
     audit::log(tx, clock, "product", id, "delete", serde_json::Value::Null)
 }
 
@@ -921,6 +975,123 @@ fn set_archived(
         "archive",
         serde_json::json!({ "archived": archived }),
     )
+}
+
+#[cfg(test)]
+mod stock_tests {
+    use super::*;
+    use crate::calc::PriceMode;
+    use crate::db::Db;
+    use crate::tax::{TaxCategory, TaxChoice};
+    use crate::testutil::{clock, insert_raw_invoice, sample_business};
+    use rust_decimal::dec;
+
+    fn goods(brand_id: Uuid, stock: Decimal) -> NewProduct {
+        NewProduct {
+            brand_id,
+            name: "Shirt".into(),
+            description: String::new(),
+            kind: ProductKind::Goods,
+            unit: "Stk".into(),
+            price: dec!(20),
+            price_mode: PriceMode::Gross,
+            tax: TaxChoice::Fixed(TaxCategory::Standard { rate: dec!(19) }),
+            stock: Some(stock),
+            active: true,
+        }
+    }
+
+    fn book(conn: &Connection, product_id: Uuid, invoice_id: Uuid, delta: &str) {
+        conn.execute(
+            "INSERT INTO stock_moves (id, product_id, invoice_id, delta, at) VALUES (?1, ?2, ?3, ?4, 'x')",
+            params![Uuid::new_v4().to_string(), product_id.to_string(), invoice_id.to_string(), delta],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn effective_stock_sums_moves() {
+        let mut db = Db::open_in_memory().unwrap();
+        let (business_id, brand_id) = db
+            .write(|tx| create_business(tx, &clock(), sample_business()))
+            .unwrap();
+        let id = db
+            .write(|tx| create_product(tx, &clock(), goods(brand_id, dec!(5))))
+            .unwrap();
+        let invoice = insert_raw_invoice(db.read(), business_id, brand_id, None, "draft");
+        book(db.read(), id, invoice, "-2");
+        book(db.read(), id, invoice, "1");
+        assert_eq!(get_product(db.read(), id).unwrap().stock, Some(dec!(4)));
+        assert_eq!(
+            list_products(db.read(), brand_id, false).unwrap()[0].stock,
+            Some(dec!(4))
+        );
+    }
+
+    #[test]
+    fn update_product_sets_effective_stock() {
+        let mut db = Db::open_in_memory().unwrap();
+        let (business_id, brand_id) = db
+            .write(|tx| create_business(tx, &clock(), sample_business()))
+            .unwrap();
+        let id = db
+            .write(|tx| create_product(tx, &clock(), goods(brand_id, dec!(5))))
+            .unwrap();
+        let invoice = insert_raw_invoice(db.read(), business_id, brand_id, None, "draft");
+        book(db.read(), id, invoice, "-2");
+        let mut product = get_product(db.read(), id).unwrap();
+        product.stock = Some(dec!(10));
+        db.write(|tx| update_product(tx, &clock(), &product))
+            .unwrap();
+        assert_eq!(get_product(db.read(), id).unwrap().stock, Some(dec!(10)));
+        let base: String = db
+            .read()
+            .query_row(
+                "SELECT stock FROM products WHERE id = ?1",
+                [id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(base.parse::<Decimal>().unwrap(), dec!(12));
+        let audited: i64 = db
+            .read()
+            .query_row(
+                "SELECT COUNT(*) FROM audit_log WHERE entity = 'product' AND action = 'update'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(audited, 1);
+    }
+
+    #[test]
+    fn migration_v2_rebases_stock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("v1.psybil");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(include_str!("schema_v1.sql")).unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+            conn.execute_batch(
+                "INSERT INTO businesses (id, name, created_at, updated_at) VALUES ('b', 'B', 'x', 'x');
+                 INSERT INTO brands (id, business_id, name, created_at, updated_at) VALUES ('m', 'b', 'M', 'x', 'x');
+                 INSERT INTO products (id, brand_id, name, kind, price, price_mode, tax, stock, created_at, updated_at)
+                   VALUES ('00000000-0000-0000-0000-000000000001', 'm', 'P', 'goods', '1', 'net', '{}', '3', 'x', 'x');
+                 INSERT INTO invoices (id, business_id, brand_id, invoice_date, service_date, payment_days, due_date,
+                   price_mode, currency, language, created_at, updated_at)
+                   VALUES ('i', 'b', 'm', '2026-01-01', '{}', 0, '2026-01-01', 'net', 'EUR', 'de', 'x', 'x');
+                 INSERT INTO stock_moves (id, product_id, invoice_id, delta, at)
+                   VALUES ('s', '00000000-0000-0000-0000-000000000001', 'i', '-2', 'x');",
+            )
+            .unwrap();
+        }
+        let db = Db::open(&path).unwrap();
+        let base: String = db
+            .read()
+            .query_row("SELECT stock FROM products", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(base.parse::<Decimal>().unwrap(), dec!(5));
+    }
 }
 
 #[cfg(test)]

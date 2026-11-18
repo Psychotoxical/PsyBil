@@ -16,13 +16,15 @@ pub fn log(
     data: serde_json::Value,
 ) -> Result<()> {
     tx.execute(
-        "INSERT INTO audit_log (at, entity, entity_id, action, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO audit_log (at, entity, entity_id, action, data, uid)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
             timestamp(clock),
             entity,
             entity_id.to_string(),
             action,
-            data.to_string()
+            data.to_string(),
+            Uuid::new_v4().to_string()
         ],
     )?;
     Ok(())

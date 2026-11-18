@@ -41,6 +41,37 @@ pub fn d(y: i32, m: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(y, m, day).unwrap()
 }
 
+/// A clock whose time can be moved forward, for merge and lock tests.
+pub struct ManualClock {
+    now: std::cell::Cell<chrono::DateTime<chrono::Utc>>,
+}
+
+impl ManualClock {
+    pub fn new() -> ManualClock {
+        ManualClock {
+            now: std::cell::Cell::new(
+                chrono::DateTime::parse_from_rfc3339("2026-11-18T10:00:00Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
+            ),
+        }
+    }
+
+    pub fn advance_secs(&self, secs: i64) {
+        self.now
+            .set(self.now.get() + chrono::Duration::seconds(secs));
+    }
+}
+
+impl crate::dates::Clock for ManualClock {
+    fn today(&self) -> NaiveDate {
+        self.now.get().date_naive()
+    }
+    fn now_utc(&self) -> chrono::DateTime<chrono::Utc> {
+        self.now.get()
+    }
+}
+
 pub fn clock() -> FixedClock {
     FixedClock {
         today: d(2026, 11, 18),

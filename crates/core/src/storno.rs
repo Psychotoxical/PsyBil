@@ -21,6 +21,7 @@ pub fn cancel_invoice(tx: &Transaction, clock: &dyn Clock, id: Uuid) -> Result<U
     if original.state != InvoiceState::Issued
         || original.kind != InvoiceKind::Invoice
         || original.cancelled_by_id.is_some()
+        || original.legacy_cancelled
     {
         return Err(Error::NotCancellable);
     }
